@@ -1,17 +1,11 @@
 # Chameleon
 
-İki ayrı adli bilişim uzaktan imaj alma motorunu tek bir seçim ekranı
-altında birleştiren araç.
+Adli bilişimde uzaktan disk imajı almak için iki farklı yöntemi bir arada sunan araç.
 
-- **SSH Motoru** (`engines/ssh_engine/`) — SSH + paramiko üzerinden uzak
-  Linux sunucudan `dd`/`sha256sum` ile chunk bazlı imaj alma, yazılımsal
-  write-blocker, kalıcı resume, chain-of-custody log.
-- **BitGuard Motoru** (`engines/bitguard_engine/`) — TLS 1.3 soket
-  üzerinden client/server modeliyle chunk bazlı self-healing transfer,
-  JSON/TXT/HTML chain-of-custody raporu, E01/AFF4-benzeri konteynerler.
+- `engines/ssh_engine/` — SSH ile bağlanıp hedef sunucuda `dd` çalıştırarak imaj çeken yöntem. Kaynak: [adli-imaj-projesi](https://github.com/toprakkulekcioglu/adli-imaj-projesi) / [remote-forensic-imager](https://github.com/adli-imaj/remote-forensic-imager).
+- `engines/bitguard_engine/` — TLS soketi üzerinden client/server modeliyle çalışan yöntem. Kaynak: [Bit-Guard](https://github.com/MehmetEmin-Y/Bit-Guard).
 
-İki motor da kendi orijinal repolarından birebir taşındı ve bağımsız
-çalışır (bkz. `docs/architecture.md`).
+İki yöntem de kendi haliyle korunuyor, aralarında kod birleştirme yapılmadı — SSH ve TLS soket mimarileri çok farklı olduğu için tek koda indirmek yerine `launcher/chameleon_gui.py` üzerinden hangisinin çalıştırılacağı seçiliyor.
 
 ## Çalıştırma
 
@@ -20,10 +14,8 @@ pip install -r engines/ssh_engine/requirements.txt
 python launcher/chameleon_gui.py
 ```
 
-Açılan ekrandan hangi motorun başlatılacağı seçilir.
+Açılan ekrandan dil ve yöntem seçilir, seçilen motor ayrı bir pencerede başlar.
 
-## Dokümantasyon
+## Planlanan işler
 
-- Mimari kararlar: [`docs/architecture.md`](docs/architecture.md)
-- Planlanan geliştirmeler: [`docs/roadmap.md`](docs/roadmap.md)
-- SSH motorunun kapsam/kuralları: [`engines/ssh_engine/PROJE_TALIMATI.md`](engines/ssh_engine/PROJE_TALIMATI.md)
+Bkz. [docs/roadmap.md](docs/roadmap.md).

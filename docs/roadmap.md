@@ -1,32 +1,19 @@
-# Chameleon Roadmap
+# Yapılacaklar / fikirler
 
-BitGuard ekibinin kendi projesinde "geliştirilebilir alan" olarak
-işaretlediği, henüz **yapılmamış** maddeler (durumları ekip toplantısında
-netleştirilecek):
+BitGuard'ın kendi projesinde planlayıp henüz yapmadığı şeyler:
 
-1. Gerçek EWF/E01 ve AFF4 format uyumluluğu (`libewf`, `pyaff4` entegrasyonu)
-2. SSH üzerinden kurulumsuz uzak imajlama — BitGuard'da güvenlik/karmaşıklık
-   riski nedeniyle devre dışı bırakılmıştı. **Not:** Chameleon'da `ssh_engine`
-   zaten bunu farklı bir yaklaşımla yapıyor; iki motor arasında kavramsal
-   çakışma var mı, toplantıda konuşulmalı.
-3. Büyük imajları `.001/.002...` şeklinde parçalara bölme (split imaging)
-4. Gerçek PKI/CA tabanlı kimlik doğrulama (şu an TLS sadece şifreliyor,
-   sertifika yetkilisi doğrulaması yok)
-5. Bellek (RAM) imajlama — kullanıcı modundan doğrudan erişim OS tarafından
-   engellendiği için WinPmem/LiME gibi çekirdek modülü gerektirir
-6. Çoklu istemci / eşzamanlı imajlama desteği
-7. Dijital kod imzalama (code signing) — Windows SmartScreen uyarısını
-   kaldırmak için ticari sertifika gerekir
-8. Merkezi vaka yönetimi (SQLite tabanlı "vaka geçmişi" görünümü)
-9. Adaptif chunk boyutlandırma (şu an ikisi de sabit 4MB kullanıyor)
-10. Otomatik test kapsamı (pytest ile birim/entegrasyon testleri — `tests/`
-    klasörü bunun için ayrıldı, şu an boş)
+- Gerçek EWF/E01 ve AFF4 desteği (`libewf`, `pyaff4`)
+- SSH ile kurulumsuz uzak imajlama (güvenlik riski yüzünden kapatılmıştı)
+- Büyük imajları `.001`/`.002` gibi parçalara bölme
+- Gerçek PKI/CA doğrulaması (şu an TLS sadece şifreliyor)
+- RAM imajlama (WinPmem/LiME gerekir, OS kullanıcı modundan erişimi bloke ediyor)
+- Aynı anda birden fazla istemciden imaj alma
+- .exe'yi kod imzalama (SmartScreen uyarısını kaldırmak için)
+- Vaka geçmişi tutan merkezi bir veritabanı (SQLite)
+- Ağ hızına göre değişen chunk boyutu (şu an sabit 4MB)
+- Otomatik testler (pytest)
 
-## Chameleon'a özel yeni madde
+Bize ait, ek olarak düşündüğümüz:
 
-- **Çoklu dil desteği (TR/EN)** — launcher seviyesinde başladı
-  (`shared/i18n/strings.py`), motorların kendi arayüzlerine yayılması
-  ayrı, daha büyük bir iş.
-
-Hangi maddelerin bu ürünleşme aşamasında hedefleneceği ekip toplantısında
-netleştirilecek; bu liste şimdilik sadece envanterdir, taahhüt değildir.
+- Çoklu dil desteği (TR/EN) — launcher'da başladı, motorların kendi arayüzüne henüz yayılmadı
+- İki motorun ortak bir rapor formatı kullanması (şu an ikisi de kendi formatını üretiyor)
