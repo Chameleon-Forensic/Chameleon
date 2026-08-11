@@ -19,3 +19,4 @@ Açılan ekrandan dil ve yöntem seçilir, seçilen motor ayrı bir pencerede ba
 ## Planlanan işler
 
 Bkz. [docs/roadmap.md](docs/roadmap.md).
+.
