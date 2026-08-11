@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# PyInstaller build output
+build/
+dist/
+*.spec
+
+# BitGuard runtime output (don't commit test images/reports)
+*.dd
+*.E01
+*.aff4
+*_chain_of_custody.json
+*_audit_log.txt
+*_integrity_report.html
+bitguard_crash_log.txt
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/

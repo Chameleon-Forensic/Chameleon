@@ -1,0 +1,13 @@
+# Test/demo sırasında oluşacak büyük imaj dosyaları GitHub'a gitmesin
+logs/*.log
+remote_agent/logs/*.log
+*.raw
+*.dd
+*.img
+*.E01
+venv/
+.venv/
+__pycache__/
+*.pyc
+.env
+.idea/

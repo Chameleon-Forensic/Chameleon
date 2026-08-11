@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# PyInstaller build ciktisi
+build/
+dist/
+*.spec
+
+# Imaj / rapor / log ciktilari (hicbir zaman commit edilmez)
+*.raw
+*.dd
+*.img
+*.E01
+*.aff4
+logs/*.log
+**/logs/*.log
+*_chain_of_custody.json
+*_audit_log.txt
+*_integrity_report.html
+bitguard_crash_log.txt
+images/
+**/local_collector/images/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+.env
