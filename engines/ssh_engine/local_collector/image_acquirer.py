@@ -22,6 +22,7 @@ dosyasina islenir.
 import getpass
 import json
 import os
+import shlex
 import time
 from datetime import datetime, timezone
 
@@ -125,13 +126,17 @@ def get_disk_size_bytes(ssh, disk_path, password=None):
     guvenli sekilde iletilir; komut metnine hic gomulmez (shell injection
     ve `ps aux` ile gorunme riskini onlemek icin).
     """
+    # disk_path kullanicidan (GUI/CLI) geliyor; shlex.quote olmadan f-string'e
+    # gomulurse shell injection riski var -- parola icin zaten uygulanan
+    # ayni korumayi disk_path icin de burada saglıyoruz.
+    safe_disk_path = shlex.quote(disk_path)
     if password:
         output, _error, _exit_status = ssh.run_command(
-            f"blockdev --getsize64 {disk_path}", sudo_password=password
+            f"blockdev --getsize64 {safe_disk_path}", sudo_password=password
         )
     else:
         output, _error, _exit_status = ssh.run_command(
-            f"sudo blockdev --getsize64 {disk_path}", get_pty=True
+            f"sudo blockdev --getsize64 {safe_disk_path}", get_pty=True
         )
 
     if output is None:
@@ -154,7 +159,7 @@ def get_remote_block_hash(ssh, disk_path, block_no, block_size_mb, password):
     calisir).
     """
     dd_cmd = (
-        f"dd if={disk_path} bs={block_size_mb}M skip={block_no} count=1 "
+        f"dd if={shlex.quote(disk_path)} bs={block_size_mb}M skip={block_no} count=1 "
         f"conv=noerror,sync status=none 2>/dev/null | sha256sum"
     )
     if password:
@@ -187,7 +192,7 @@ def acquire_raw_block(ssh, disk_path, block_no, block_size_mb, password):
         return None
 
     dd_cmd = (
-        f"dd if={disk_path} bs={block_size_mb}M skip={block_no} count=1 "
+        f"dd if={shlex.quote(disk_path)} bs={block_size_mb}M skip={block_no} count=1 "
         f"conv=noerror,sync status=none"
     )
 
@@ -260,7 +265,7 @@ def ensure_connection(ssh, wait_seconds=(1, 2, 4)):
 def _print_progress(done_blocks, total_blocks, block_size_mb):
     """
     docs/PROJE_TALIMATI.md madde 6 ornegine uygun tek satirlik ilerleme
-    cubugu: 'Ilerleme: %42 (8.4 GB / 20 GB)' seklinde \\r ile guncellenir.
+    cubugu: 'İlerleme: %42 (8.4 GB / 20 GB)' seklinde \\r ile guncellenir.
     """
     if total_blocks <= 0:
         return
@@ -268,7 +273,7 @@ def _print_progress(done_blocks, total_blocks, block_size_mb):
     done_gb = (done_blocks * block_size_mb) / 1024
     total_gb = (total_blocks * block_size_mb) / 1024
     print(
-        f"\rIlerleme: %{pct:3d} ({done_gb:.1f} GB / {total_gb:.1f} GB)",
+        f"\rİlerleme: %{pct:3d} ({done_gb:.1f} GB / {total_gb:.1f} GB)",
         end="",
         flush=True,
     )
@@ -499,7 +504,8 @@ def acquire_disk_image(
     }
 
 
-def concatenate_blocks(block_paths, total_blocks, output_dir=IMAGE_DIR, output_path=None):
+def concatenate_blocks(block_paths, total_blocks, output_dir=IMAGE_DIR, output_path=None,
+                        cleanup=False):
     """
     Sirali kucuk blok dosyalarini tek bir imaj dosyasinda birlestirir.
 
@@ -509,6 +515,12 @@ def concatenate_blocks(block_paths, total_blocks, output_dir=IMAGE_DIR, output_p
     Eksik blok varsa (hicbir deneme basarili olmadiysa) birlestirme
     YAPILMAZ ve None doner — yarim/tutarsiz bir imajin butun gibi
     sunulmasi engellenir.
+
+    cleanup=True verilirse, birlestirme basarili olduktan sonra kucuk
+    block_*.dd parcalari diskten silinir (aksi halde hem parcalar hem
+    birlesik imaj ayni anda durur, imajin 2 kati yer kaplar). Bu SADECE
+    "Live Acquisition" DISINDAKI modlarda True gecilmeli -- Live modda
+    baglanti kopup devam etmek gerekebilir, parcalar resume icin lazim.
     """
     if output_path is None:
         output_path = os.path.join(output_dir, "full_image.dd")
@@ -522,6 +534,14 @@ def concatenate_blocks(block_paths, total_blocks, output_dir=IMAGE_DIR, output_p
         for i in range(total_blocks):
             with open(block_paths[i], "rb") as parca:
                 cikti.write(parca.read())
+
+    if cleanup:
+        for i in range(total_blocks):
+            try:
+                os.remove(block_paths[i])
+            except OSError as e:
+                print(f"[-] Blok {i} dosyasi silinemedi ({block_paths[i]}): {e}")
+        print(f"[i] {total_blocks} parca dosyasi temizlendi (birlesik imaj korunuyor).")
 
     return output_path
 

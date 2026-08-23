@@ -263,8 +263,12 @@ def main():
             if sonuc is None:
                 continue
 
+            # cleanup: sadece Live disinda (Offline'da) kucuk parca dosyalari
+            # birlestirme sonrasi silinir -- Live modda baglanti kopup devam
+            # etmek gerekebilir, parcalar resume icin lazim.
             imaj_yolu = image_acquirer.concatenate_blocks(
-                sonuc["block_paths"], sonuc["total_blocks"], output_dir=sonuc["output_dir"]
+                sonuc["block_paths"], sonuc["total_blocks"], output_dir=sonuc["output_dir"],
+                cleanup=(choice != "1"),
             )
             if imaj_yolu is None:
                 print("\nEksik bloklar nedeniyle imaj birlestirilemedi.")

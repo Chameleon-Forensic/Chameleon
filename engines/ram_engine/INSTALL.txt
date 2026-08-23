@@ -1,0 +1,31 @@
+﻿RamImager - Hedef Makineye Kurulum
+===================================
+
+Bu klasordeki dosyalar baska bir Windows x64 (10/11) makineye kopyalanabilir.
+Yeniden derleme GEREKMEZ. Ancak asagidaki adimlar HEDEF makinede yapilmalidir:
+
+1) process modu (surucu gerekmez) - hemen calisir:
+   cli\RamImagerCLI.exe process --pid <PID> --output C:\evidence\proc.dmp
+
+2) full modu (tam RAM - surucu gerekir):
+   a) Secure Boot KAPALI olmali (UEFI/BIOS ayari, fiziksel erisim gerekir).
+      Acik ise imzasiz/test-imzali surucu KESINLIKLE yuklenmez.
+   b) Yonetici PowerShell'de test signing'i acin ve YENIDEN BASLATIN:
+        bcdedit /set testsigning on
+        Restart-Computer
+   c) Yeniden baslattiktan sonra, Yonetici PowerShell'de:
+        cli\RamImagerCLI.exe full --output C:\evidence\ram.img --driver driver\RamImagerDriver.sys --case "CASE-001" --examiner "Ad Soyad"
+
+3) GUI (opsiyonel, test icin):
+      gui\<net-surumu>\RamImagerGUI.exe
+
+Test signing'i geri kapatmak icin:
+   bcdedit /set testsigning off
+   Restart-Computer
+
+ONEMLI: Bu surucu gelistirme/test amaclidir ve imzasizdir. Gercek/uretim
+kullanimi icin EV kod imzalama sertifikasi + Microsoft attestation signing
+gerekir (bkz. docs/BUILD.md, ana depoda). O zaman Secure Boot/test signing
+adimlarina gerek kalmaz.
+
+Yasal uyari icin docs/LEGAL.md dosyasina bakin.

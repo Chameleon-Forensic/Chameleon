@@ -1,30 +1,35 @@
 """
 Chameleon launcher'i icin basit dil tablosu.
-Motorlerin (ssh_engine, bitguard_engine) kendi ic arayuz metinleri
-HENUZ buna bagli degil -- bu ilk asamada sadece launcher/chameleon_gui.py
-kullaniyor (bkz. docs/roadmap.md, "Coklu dil destegi" maddesi).
+Motorlerin (ssh_engine, ram_engine) kendi ic arayuz metinleri HENUZ buna
+bagli degil -- bu ilk asamada sadece launcher/chameleon_gui.py kullaniyor.
 """
 
 STRINGS = {
     "tr": {
-        "title": "Chameleon - Adli Imaj Alma Araci",
+        "title": "Chameleon",
+        "subtitle": "Digital Forensics Acquisition Engine",
         "choose_language": "Dil",
-        "choose_engine": "Yontem secin:",
-        "ssh_engine": "SSH Motoru (uzak Linux, dd tabanli)",
-        "bitguard_engine": "BitGuard Motoru (TLS soket, client/server)",
-        "launch": "Baslat",
-        "launched": "baslatildi.",
-        "error_launch": "Baslatilamadi:",
+        "choose_engine": "Yöntem seç",
+        "ssh_engine": "SSH ile uzak imaj al",
+        "ssh_engine_desc": "Linux sunucuya SSH ile bağlanıp dd/sha256sum ile çalışır",
+        "ram_engine": "RAM imajı al (Windows, yerel)",
+        "ram_engine_desc": "Bu makinede çalışır, uzak bağlantı gerekmez",
+        "launched": "açıldı.",
+        "error_launch": "Başlatılamadı, dosya bulunamadı mı diye kontrol et:",
+        "missing_file": "Bu dosya olması gereken yerde değil:",
     },
     "en": {
-        "title": "Chameleon - Forensic Imaging Tool",
+        "title": "Chameleon",
+        "subtitle": "Digital Forensics Acquisition Engine",
         "choose_language": "Language",
-        "choose_engine": "Choose method:",
-        "ssh_engine": "SSH Engine (remote Linux, dd-based)",
-        "bitguard_engine": "BitGuard Engine (TLS socket, client/server)",
-        "launch": "Launch",
-        "launched": "launched.",
-        "error_launch": "Failed to launch:",
+        "choose_engine": "Choose method",
+        "ssh_engine": "Remote image over SSH",
+        "ssh_engine_desc": "Connects to a Linux server over SSH, uses dd/sha256sum",
+        "ram_engine": "RAM image (Windows, local)",
+        "ram_engine_desc": "Runs on this machine, no remote connection needed",
+        "launched": "started.",
+        "error_launch": "Couldn't start it, check if the file is missing:",
+        "missing_file": "This file isn't where it should be:",
     },
 }
 

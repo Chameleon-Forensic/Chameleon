@@ -6,6 +6,8 @@ calistiran yardimci modul. ssh_connector.py'nin run_command() fonksiyonunu
 kullanir.
 """
 
+import shlex
+
 import chain_of_custody as coc
 
 
@@ -16,10 +18,15 @@ def _run_blockdev(ssh, flag, disk_path, password):
     mekanizmasiyla (stdin uzerinden) guvenli sekilde iletilir. password
     verilmezse (NOPASSWD sudo yapilandirmasi varsa) get_pty=True ile
     dogrudan calistirilir.
+
+    disk_path kullanicidan geliyor; shlex.quote ile kacirilmadan f-string'e
+    gomulurse shell injection riski olusur (bkz. image_acquirer.py'deki
+    ayni duzeltme).
     """
+    safe_disk_path = shlex.quote(disk_path)
     if password:
-        return ssh.run_command(f"blockdev {flag} {disk_path}", sudo_password=password)
-    return ssh.run_command(f"sudo blockdev {flag} {disk_path}", get_pty=True)
+        return ssh.run_command(f"blockdev {flag} {safe_disk_path}", sudo_password=password)
+    return ssh.run_command(f"sudo blockdev {flag} {safe_disk_path}", get_pty=True)
 
 
 def apply_write_block(ssh, disk_path, password=None):

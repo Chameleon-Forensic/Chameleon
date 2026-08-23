@@ -1,91 +1,171 @@
 """
 Chameleon ana secim ekrani.
 
-Iki motoru (ssh_engine, bitguard_engine) birbirine karistirmadan, her
-birini kendi bagimsiz alt sureci (subprocess) olarak baslatir. Motorlerin
-ic kodu HIC DEGISTIRILMEDEN calisir -- bu ekran sadece hangisinin
-acilacagina karar veren ince bir secim katmani (bkz. docs/architecture.md).
+Iki motor da (ssh_engine, ram_engine) artik kendi Python/CTk arayuzumuz
+oldugu icin ayri pencere/subprocess acmiyoruz -- ayni pencerenin icinde
+bir ekrandan digerine geciyoruz (bkz. _show_ssh_engine, _show_ram_engine,
+_show_selection). RamImagerGUI.exe (vendor'in kendi WinForms programi)
+artik hic kullanilmiyor; onun yerine RamImagerCLI.exe'yi dogrudan cagiran
+engines/ram_engine/ram_gui.py kullaniliyor.
 """
 
 import os
-import subprocess
 import sys
-import tkinter as tk
-from tkinter import ttk, messagebox
 
-sys.path.insert(
-    0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "shared", "i18n")
-)
+import customtkinter as ctk
+
+SHARED_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "shared")
+sys.path.insert(0, SHARED_DIR)
+sys.path.insert(0, os.path.join(SHARED_DIR, "i18n"))
 from strings import t  # noqa: E402
+import theme  # noqa: E402
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SSH_ENGINE_GUI = os.path.join(
-    PROJECT_ROOT, "engines", "ssh_engine", "local_collector", "gui_v2.py"
-)
-BITGUARD_ENGINE_GUI = os.path.join(
-    PROJECT_ROOT, "engines", "bitguard_engine", "forensic_gui.py"
-)
+SSH_ENGINE_DIR = os.path.join(PROJECT_ROOT, "engines", "ssh_engine", "local_collector")
+RAM_ENGINE_DIR = os.path.join(PROJECT_ROOT, "engines", "ram_engine")
+
+ctk.set_appearance_mode("dark")
 
 
 class ChameleonLauncher:
     def __init__(self, root):
         self.root = root
-        self.lang = tk.StringVar(value="tr")
-        self._build_ui()
+        self.lang = ctk.StringVar(value="tr")
+        self.mode = ctk.StringVar(value=theme.get_mode())
+        self.root.configure(fg_color=theme.BG_MAIN)
+        self.content = None
+        self._show_selection()
 
-    def _build_ui(self):
-        for widget in self.root.winfo_children():
-            widget.destroy()
+    def _clear(self):
+        if self.content is not None:
+            self.content.destroy()
+        self.content = ctk.CTkFrame(self.root, fg_color=theme.BG_MAIN)
+        self.content.pack(fill="both", expand=True)
 
+    def _toggle_theme(self, _value=None):
+        theme.set_mode(self.mode.get())
+        ctk.set_appearance_mode(theme.get_mode())
+        self.root.configure(fg_color=theme.BG_MAIN)
+        self._show_selection()
+
+    # -- Secim ekrani --------------------------------------------------
+    def _show_selection(self):
+        self._clear()
         lang = self.lang.get()
         self.root.title(t("title", lang))
 
-        frame = ttk.Frame(self.root, padding=20)
-        frame.pack(fill="both", expand=True)
+        top = ctk.CTkFrame(self.content, fg_color="transparent")
+        top.pack(fill="x", padx=24, pady=(20, 0))
 
-        lang_frame = ttk.Frame(frame)
-        lang_frame.pack(anchor="ne")
-        ttk.Label(lang_frame, text=t("choose_language", lang) + ":").pack(
-            side="left", padx=(0, 5)
+        ctk.CTkLabel(
+            top, text=f"🦎 {t('title', lang)}", font=("Segoe UI", 22, "bold"),
+            text_color=theme.TEXT_MAIN,
+        ).pack(side="left")
+
+        lang_switch = ctk.CTkSegmentedButton(
+            top,
+            values=["tr", "en"],
+            variable=self.lang,
+            command=lambda _: self._show_selection(),
+            fg_color=theme.BG_PANEL,
+            selected_color=theme.ACCENT,
+            selected_hover_color=theme.ACCENT_HOVER,
+            unselected_color=theme.BG_PANEL,
+            text_color=theme.TEXT_MAIN,
         )
-        lang_combo = ttk.Combobox(
-            lang_frame, textvariable=self.lang, values=["tr", "en"], width=5, state="readonly"
+        lang_switch.pack(side="right")
+
+        mode_switch = ctk.CTkSegmentedButton(
+            top,
+            values=["light", "dark"],
+            variable=self.mode,
+            command=self._toggle_theme,
+            fg_color=theme.BG_PANEL,
+            selected_color=theme.ACCENT,
+            selected_hover_color=theme.ACCENT_HOVER,
+            unselected_color=theme.BG_PANEL,
+            text_color=theme.TEXT_MAIN,
         )
-        lang_combo.pack(side="left")
-        lang_combo.bind("<<ComboboxSelected>>", lambda e: self._build_ui())
+        mode_switch.pack(side="right", padx=(0, 10))
 
-        ttk.Label(
-            frame, text=t("choose_engine", lang), font=("Segoe UI", 12, "bold")
-        ).pack(pady=(20, 10))
+        ctk.CTkLabel(
+            self.content, text=t("subtitle", lang), font=("Segoe UI", 13),
+            text_color=theme.TEXT_SECONDARY,
+        ).pack(anchor="w", padx=26, pady=(0, 18))
 
-        ttk.Button(
-            frame,
-            text=t("ssh_engine", lang),
-            width=45,
-            command=lambda: self._launch(SSH_ENGINE_GUI, "ssh_engine"),
-        ).pack(pady=5)
+        self._engine_card(t("ssh_engine", lang), t("ssh_engine_desc", lang), self._show_ssh_engine)
+        self._engine_card(t("ram_engine", lang), t("ram_engine_desc", lang), self._show_ram_engine)
 
-        ttk.Button(
-            frame,
-            text=t("bitguard_engine", lang),
-            width=45,
-            command=lambda: self._launch(BITGUARD_ENGINE_GUI, "bitguard_engine"),
-        ).pack(pady=5)
+        self.status_label = ctk.CTkLabel(
+            self.content, text="", font=("Segoe UI", 11), text_color=theme.TEXT_SECONDARY
+        )
+        self.status_label.pack(anchor="w", padx=26, pady=(6, 16))
 
-    def _launch(self, script_path, engine_name):
-        lang = self.lang.get()
-        if not os.path.isfile(script_path):
-            messagebox.showerror("Chameleon", f"Dosya bulunamadi: {script_path}")
-            return
+    def _engine_card(self, title, desc, command):
+        card = ctk.CTkFrame(
+            self.content, fg_color=theme.BG_PANEL, border_color=theme.BORDER,
+            border_width=1, corner_radius=12,
+        )
+        card.pack(fill="x", padx=24, pady=6)
+
+        text_col = ctk.CTkFrame(card, fg_color="transparent")
+        text_col.pack(side="left", fill="both", expand=True, padx=16, pady=12)
+        ctk.CTkLabel(
+            text_col, text=title, font=("Segoe UI", 14, "bold"), text_color=theme.TEXT_MAIN,
+            anchor="w",
+        ).pack(fill="x")
+        ctk.CTkLabel(
+            text_col, text=desc, font=("Segoe UI", 11), text_color=theme.TEXT_SECONDARY,
+            anchor="w",
+        ).pack(fill="x")
+
+        ctk.CTkButton(
+            card, text="Aç", width=64, fg_color=theme.ACCENT, hover_color=theme.ACCENT_HOVER,
+            command=command,
+        ).pack(side="right", padx=16)
+
+    # -- SSH motoru: ayni pencerede goster -------------------------------
+    def _show_ssh_engine(self):
+        if SSH_ENGINE_DIR not in sys.path:
+            sys.path.insert(0, SSH_ENGINE_DIR)
         try:
-            subprocess.Popen([sys.executable, script_path], cwd=os.path.dirname(script_path))
-            print(f"[chameleon] {engine_name} {t('launched', lang)}")
-        except OSError as exc:
-            messagebox.showerror("Chameleon", f"{t('error_launch', lang)} {exc}")
+            from gui_v2 import ForensicGUI
+        except ImportError as exc:
+            self.status_label.configure(
+                text=f"SSH motoru yuklenemedi: {exc}", text_color=theme.ERROR
+            )
+            return
+
+        self._clear()
+        # ForensicGUI artik kendi CTk widget'larini kuruyor, ayni tema
+        # katmaninda kalmasi icin duz Frame yerine CTkFrame kullaniyoruz.
+        inner = ctk.CTkFrame(self.content, fg_color=theme.BG_MAIN)
+        inner.pack(fill="both", expand=True)
+        ForensicGUI(inner, on_back=self._show_selection)
+
+    # -- RAM motoru: ayni pencerede goster -------------------------------
+    def _show_ram_engine(self):
+        if RAM_ENGINE_DIR not in sys.path:
+            sys.path.insert(0, RAM_ENGINE_DIR)
+        try:
+            from ram_gui import RamEngineGUI
+        except ImportError as exc:
+            self.status_label.configure(
+                text=f"RAM motoru yuklenemedi: {exc}", text_color=theme.ERROR
+            )
+            return
+
+        self._clear()
+        inner = ctk.CTkFrame(self.content, fg_color=theme.BG_MAIN)
+        inner.pack(fill="both", expand=True)
+        RamEngineGUI(inner, on_back=self._show_selection)
 
 
 if __name__ == "__main__":
-    root = tk.Tk()
-    root.geometry("420x260")
+    root = ctk.CTk()
+    root.minsize(700, 500)
     ChameleonLauncher(root)
+    # Pencere ciziminden hemen sonra cagrilirsa bazi ortamlarda gec
+    # uygulaniyor; kisa bir after ile daha guvenilir calisiyor.
+    root.after(10, lambda: root.state("zoomed"))
     root.mainloop()

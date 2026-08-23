@@ -15,16 +15,25 @@ kısıtları burada.
 ```
 chameleon/
 ├── engines/
-│   ├── ssh_engine/       # SSH + dd tabanlı motor
-│   └── bitguard_engine/  # TLS soket tabanlı motor (Bit-Guard projesinden)
-├── launcher/              # tek giriş noktası, yöntem/dil seçim ekranı
-├── shared/i18n/           # launcher'ın dil tablosu
-└── docs/roadmap.md        # planlanan işler
+│   ├── ssh_engine/  # SSH + dd tabanlı, uzak Linux sunucuyu hedefler
+│   └── ram_engine/  # Windows'ta yerel çalışan RAM imaj aracı (sadece derlenmiş hali, kaynak yok)
+├── launcher/          # tek giriş noktası, yöntem/dil seçim ekranı
+├── shared/i18n/       # launcher'ın dil tablosu
+└── docs/roadmap.md    # planlanan işler
 ```
 
-İki motor bilinçli olarak ayrı tutuluyor: SSH+`dd` ile TLS soket çok
-farklı ağ modelleri, tek koda indirmek yerine `launcher/chameleon_gui.py`
-hangisinin çalışacağını seçiyor.
+Motorlar bilinçli olarak ayrı tutuluyor: `ssh_engine` uzak bir Linux
+sunucuyu hedefliyor, `ram_engine` ise SSH gerektirmeden bu makinede
+çalışıyor — ikisi tek koda indirilemeyecek kadar farklı. `launcher/
+chameleon_gui.py` hangisinin çalışacağını seçtiren ince bir katman.
+
+`ram_engine` hakkında bilmen gerekenler: `engines/ram_engine/docs/`
+içinde zaten var, tekrar etmiyoruz — özellikle `USAGE.md` (CLI
+parametreleri) ve `PROJE_DOKUMANI.md` (mimari, IOCTL sözleşmesi, bilinen
+sınırlamalar) faydalı. Kısaca: `process` modu sürücü gerektirmez ve
+hemen çalışır, `full` modu (gerçek fiziksel RAM) imzasız bir test
+sürücüsü kullandığı için hedef makinede Secure Boot kapatma + test
+signing + reboot gerektiriyor.
 
 ## `ssh_engine` nasıl çalışıyor
 
