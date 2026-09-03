@@ -5,10 +5,13 @@ __pycache__/
 .venv/
 venv/
 
-# PyInstaller build ciktisi
+# PyInstaller build ciktisi (dist/build klasorleri) -- ama elle yazilan
+# build.spec (paketleme tarifi) commit edilmeli, otomatik uretilen .spec'ler
+# degil, o yuzden ozel olarak istisna tutuluyor.
 build/
 dist/
 *.spec
+!build.spec
 
 # Imaj / rapor / log ciktilari (hicbir zaman commit edilmez)
 *.raw
@@ -18,6 +21,7 @@ dist/
 *.aff4
 logs/*.log
 **/logs/*.log
+**/ssh_engine/logs/
 *_chain_of_custody.json
 *_audit_log.txt
 *_integrity_report.html
@@ -25,9 +29,23 @@ bitguard_crash_log.txt
 images/
 **/local_collector/images/
 
+# Operator'un Tor client-auth OZEL anahtari -- asla commit edilmez, her
+# operatorde yerel/farkli olmali (bkz. gui_v2.py/gui_v2_qt.py
+# _load_or_create_operator_key). Gercek yol PROJECT_ROOT'a (ssh_engine/,
+# local_collector'in BIR UST dizini) gore -- onceki desen
+# "**/local_collector/keys/" hicbir zaman eslesmiyordu, duzeltildi.
+**/ssh_engine/keys/
+
+# Vaka gecmisi listesi + gercek rapor ciktilari -- kisisel/vaka verisi,
+# her kurulumda yerel/farkli olmali (bkz. shared/forensic_report.py)
+shared/data/
+
 # OS / editor
 .DS_Store
 Thumbs.db
 .vscode/
 .idea/
 .env
+
+# Claude Code'un kendi yerel arac ayarlari -- gelistiriciye/makineye ozel
+.claude/

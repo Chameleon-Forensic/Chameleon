@@ -27,6 +27,7 @@ import chain_of_custody as coc
 from image_acquirer import (
     _new_manifest_path,
     delete_manifest,
+    ensure_connection,
 )
 
 MAX_RETRY_PER_BLOCK = 3
@@ -186,6 +187,28 @@ def acquire_disk_image_windows(
         block_ok = False
 
         while retry_count <= MAX_RETRY_PER_BLOCK and not block_ok:
+            if not ensure_connection(ssh):
+                # Baglanti hicbir sekilde geri gelmiyor: burada zorla devam
+                # etmek yerine islemi durduruyoruz -- ayni image_acquirer.py
+                # deseni. Su ana kadar alinan bloklar diskte duruyor; ayni
+                # cagriyi start_block=block_no ile tekrar calistirarak
+                # kaldigi yerden devam edilebilir.
+                coc.log_event(
+                    coc.EVENT_EXAM_ERROR,
+                    f"Baglanti kurulamadigi icin imaj alma blok {block_no}'da durduruldu "
+                    f"(Windows, kaldigi yerden devam icin start_block={block_no})",
+                )
+                return {
+                    "total_blocks": total_blocks,
+                    "acquired_blocks": acquired_blocks,
+                    "failed_blocks": failed_blocks,
+                    "block_paths": block_paths,
+                    "block_size_mb": block_size_mb,
+                    "output_dir": output_dir,
+                    "manifest_path": manifest_path,
+                    "resume_from": block_no,
+                }
+
             uzak_hash = get_remote_block_hash_windows(ssh, disk_number, block_no, block_size_mb)
             if uzak_hash is None:
                 coc.log_event(

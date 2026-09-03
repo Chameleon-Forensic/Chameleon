@@ -22,6 +22,14 @@ EVENT_WRITE_BLOCK_APPLIED = "WRITE_BLOCK_APPLIED"
 EVENT_WRITE_BLOCK_SKIPPED = "WRITE_BLOCK_SKIPPED"
 EVENT_HASH_VERIFIED = "HASH_VERIFIED"
 EVENT_HASH_MISMATCH = "HASH_MISMATCH"
+# Baglanti Tor Hidden Service uzerinden mi (acil durum, NAT/firewall
+# asma) yoksa dogrudan/port-yonlendirmeli SSH ile mi kuruldu -- raporu
+# okuyan kisi hangi tasima yonteminin kullanildigini gorebilsin diye.
+EVENT_TOR_CONNECTION_ESTABLISHED = "TOR_CONNECTION_ESTABLISHED"
+# Baglanti operatorun VPN tuneli uzerinden kuruldu -- Tor gibi ekstra bir
+# tasima katmani degil (SSH dogrudan kuruluyor), sadece delil zincirinde
+# hangi ag yolunun kullanildigi kayit altina aliniyor.
+EVENT_VPN_CONNECTION_USED = "VPN_CONNECTION_USED"
 
 # Bu çalıştırmaya ait log dosyasının yolu (ilk log_event çağrısında oluşur)
 _current_log_file = None
@@ -70,6 +78,47 @@ def get_log_file_path():
     oluşturulmadıysa oluşturur).
     """
     return _get_log_file()
+
+
+def read_events(log_file_path=None, start_time_utc=None, end_time_utc=None):
+    """
+    Duz metin log dosyasini parse edip yapili (dict listesi) olay
+    listesi olarak doner -- shared/forensic_report.py'nin ortak rapora
+    "chain_of_custody" bolumunu doldurmak icin kullanir.
+
+    start_time_utc/end_time_utc (ISO 8601 string) verilirse, sadece o
+    araliktaki olaylar donulur -- log dosyasi tum oturum boyunca tek
+    dosya oldugu icin (birden fazla alma islemi ayni dosyaya yazabilir),
+    tek bir alma islemine ait rapor sadece kendi olaylarini icersin diye.
+    """
+    path = log_file_path or get_log_file_path()
+    events = []
+    if not os.path.exists(path):
+        return events
+
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            parts = [p.strip() for p in line.split("|")]
+            if len(parts) != 4:
+                continue
+            ts_raw, event_type, description, hash_part = parts
+            ts = ts_raw.strip("[]")
+
+            if start_time_utc and ts < start_time_utc:
+                continue
+            if end_time_utc and ts > end_time_utc:
+                continue
+
+            events.append({
+                "timestamp_utc": ts,
+                "event": event_type,
+                "description": description,
+                "hash": None if hash_part == "-" else hash_part,
+            })
+    return events
 
 
 if __name__ == "__main__":

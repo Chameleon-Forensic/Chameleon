@@ -2,6 +2,8 @@ import getpass
 import os
 import paramiko
 
+from socks5 import connect_via_socks5
+
 # NOT: Test/demo sunucusunda, SSH ile baglanilan kullanicinin
 # /etc/sudoers dosyasinda blockdev ve dd gibi komutlar icin NOPASSWD
 # tanimli olmasi gerekir. Aksi halde run_command() ile calistirilan
@@ -12,7 +14,8 @@ import paramiko
 
 class SSHConnector:
     def __init__(self, host, port=22, username=None, password=None,
-                 key_path=None, known_hosts_path=None, strict=True):
+                 key_path=None, known_hosts_path=None, strict=True,
+                 socks_proxy_port=None):
         self.host = host
         self.port = port
         self.username = username
@@ -21,6 +24,11 @@ class SSHConnector:
         self.known_hosts_path = known_hosts_path or os.path.expanduser("~/.ssh/known_hosts")
         self.strict = strict
         self.client = None
+        # socks_proxy_port verilirse (Tor senaryosu -- host bir .onion
+        # adresi), TCP baglantisi dogrudan degil, 127.0.0.1:<bu port>'taki
+        # yerel Tor SOCKS proxy'si uzerinden acilir. Mevcut duz SSH yolu
+        # (socks_proxy_port=None) hicbir sekilde degismez.
+        self.socks_proxy_port = socks_proxy_port
 
     def connect(self):
         """Uzak sunucuya güvenli bir şekilde SSH bağlantısı kurar."""
@@ -46,6 +54,17 @@ class SSHConnector:
                 "look_for_keys": True,
                 "allow_agent": True,
             }
+
+            if self.socks_proxy_port:
+                # .onion adresleri normal DNS ile cozulemez -- TCP
+                # baglantisini biz acip paramiko'ya hazir soket olarak
+                # veriyoruz (paramiko kendi baglanti mantigini atlar).
+                connect_kwargs["sock"] = connect_via_socks5(
+                    "127.0.0.1", self.socks_proxy_port, self.host, self.port,
+                )
+                # look_for_keys/allow_agent, sock uzerinden baglanirken de
+                # gecerli kalir; sadece hostname/port artik sadece SSH
+                # protokol seviyesinde (banner/host key dogrulama) kullanilir.
 
             if self.key_path and os.path.exists(self.key_path):
                 connect_kwargs["key_filename"] = self.key_path

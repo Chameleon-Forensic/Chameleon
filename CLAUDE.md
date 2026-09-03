@@ -84,10 +84,12 @@ Not: Bu projeye başka bir ekiple (BitGuard) birleşme denendi, anlaşamayıp ip
 | SSH bağlantısı (paramiko, host key doğrulama) | `engines/ssh_engine/local_collector/ssh_connector.py` |
 | Chunk okuma, hash doğrulama, resume/manifest mantığı (tam disk) | `engines/ssh_engine/local_collector/image_acquirer.py` |
 | Tek dosya/klasör alma (find + sha256sum + cat, write-blocker'sız) | `engines/ssh_engine/local_collector/file_acquirer.py` |
+| Windows hedef (SSH+PowerShell, Base64 transfer) disk + dosya/klasör | `engines/ssh_engine/local_collector/windows_acquirer.py` |
 | SHA-256 hesaplama/karşılaştırma (chunk + dosya bazlı) | `engines/ssh_engine/local_collector/hash_verifier.py` |
 | write-blocker (`blockdev --setro`) çağrısı | `engines/ssh_engine/local_collector/write_block_helper.py` |
-| Chain-of-custody log yazımı | `engines/ssh_engine/local_collector/chain_of_custody.py` |
-| SSH motoru arayüzü (CTk, form + log paneli, disk/dosya mod seçimi) | `engines/ssh_engine/local_collector/gui_v2.py` |
+| Chain-of-custody log yazımı + okuma (`read_events`) | `engines/ssh_engine/local_collector/chain_of_custody.py` |
+| Ortak adli rapor şeması (`ForensicReport`, tüm motorlar kullanır) | `shared/forensic_report.py` |
+| SSH motoru arayüzü (CTk, form + log paneli, OS/disk/dosya mod seçimi) | `engines/ssh_engine/local_collector/gui_v2.py` |
 | SSH motoru CLI (GUI'siz) | `engines/ssh_engine/local_collector/main.py` |
 | Uzak sunucudaki write-blocker/disk listeleme scriptleri (referans, gerçek akışta kullanılmıyor) | `engines/ssh_engine/remote_agent/*.sh` |
 | RAM motoru arayüzü (CTk, `RamImagerCLI.exe`'yi çağırır) | `engines/ram_engine/ram_gui.py` |
@@ -103,16 +105,18 @@ Yeni bir şey ararken önce bu tabloya bak, klasörleri baştan taramaya gerek y
 
 - Kod içi yorumlar Türkçe, değişken/fonksiyon isimleri İngilizce.
 - Her modül tek başına çalıştırılabilir/test edilebilir kalmalı.
-- Yeni üçüncü parti kütüphane eklemeden önce sor (şu an izinli: `paramiko`, `customtkinter`).
+- Yeni üçüncü parti kütüphane eklemeden önce sor (şu an izinli: `paramiko`, `PySide6`, `stem`, `cryptography`).
 - `docs/roadmap.md`'de listelenmeyen büyük bir özelliği kendi başına ekleme; kapsam dışı bir şey fark edersen önce sor.
 - Değişiklik yaptıktan sonra dur, ne yaptığını özetle — otomatik olarak bir sonraki işe geçme.
 - `README.md` ve `CONTRIBUTING.md` insanlar için yazılıyor: buralara AI'ya yönelik talimat/meta yorum ekleme, o tür içerik burada (CLAUDE.md) kalsın.
 
 ## Arayüz
 
-Launcher `customtkinter` ile yazılıyor, düz `tkinter` değil — varsayılan Tkinter görünümü kullanıcıyı rahatsız etti ("sıradan/AI görünümü" dendi). Renkler tek yerde: `shared/theme.py` (açık/koyu iki palet + `set_mode()`/`get_mode()`). Yeni bir ekran/bileşen eklerken renkleri buradan oku, dosya içinde tekrar tanımlama. Kullanıcı arayüzden açık/koyu tema arasında geçiş yapabiliyor (launcher üst barındaki geçiş düğmesi) — koyu tema VirtualBox Manager'ın görünümüne yakın olacak şekilde ayarlandı.
+Launcher `PySide6` ile yazılıyor (eski `customtkinter` sürümü tamamen kaldırıldı, bkz. `docs/roadmap.md`). Renkler tek yerde: `shared/ui_kit/theme_qt.py` (açık/koyu iki palet + `set_mode()`/`get_mode()`, aynı `globals().update()` deseni). Yeni bir ekran/bileşen eklerken renkleri buradan oku, dosya içinde tekrar tanımlama. Kullanıcı arayüzden açık/koyu tema ve TR/EN dil arasında geçiş yapabiliyor (launcher → Ayarlar sayfası) — koyu tema VirtualBox Manager'ın görünümüne yakın olacak şekilde ayarlandı. Qt widget'ları renkleri QSS'e KURULUM ANINDA gömdüğü için (canlı güncellenmiyor), tema/dil değişince ilgili ekran `_build_shell()`/`_show_*()` ile yeniden kuruluyor — bkz. `theme_qt.py` başındaki not.
 
-`ssh_engine/local_collector/gui_v2.py` da aynı paleti okuyor (`from theme import ...`, `chameleon/shared` dizinine göreli yol ile) — motor tek başına (`python gui_v2.py`) çalıştırıldığında da bulunamazsa dosyanın en üstündeki ASCII yedek renklere düşer.
+`engines/ssh_engine/local_collector/gui_v2.py` ve `engines/ram_engine/ram_gui.py` da aynı paleti (`shared/ui_kit`) okuyor — motor tek başına (`python gui_v2.py`) çalıştırıldığında da `sys.path.insert()` ile `chameleon/shared` bulunuyor.
+
+Dil desteği (TR/EN) şu an sadece `launcher/chameleon_gui.py`'de var (sidebar, ana sayfa, yöntem tanıtım sayfaları, vaka bilgileri, ayarlar) — `gui_v2.py`/`ram_gui.py`'nin kendi araç ekranları hâlâ Türkçe-only, bu bilinçli bir kapsam sınırı.
 
 Hata mesajları da tek tip/resmi kalıp olmasın ("İşlem başarısız oldu, kod: 1" gibi) — gündelik, kısa ve neyin ters gittiğini gerçekten anlatan cümleler kullan. Modal `messagebox` yerine, launcher'daki gibi sessiz bir durum satırı tercih edilebilir.
 

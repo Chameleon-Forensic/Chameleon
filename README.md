@@ -1,20 +1,40 @@
 # Chameleon
 
-Adli bilişimde imaj almak için birden fazla yöntemi tek bir arayüzde toplayan araç.
+Bir bilgisayarın diskini, dosyalarını ya da belleğini (RAM) **bozmadan**,
+**SHA-256 ile bütünlüğü kanıtlanabilir** şekilde kopyalayan bir adli
+bilişim (digital forensics) aracı.
 
-- `engines/ssh_engine/` — SSH ile bağlanıp hedef sunucuda `dd` çalıştırarak imaj çeken yöntem. Kaynak: [adli-imaj-projesi](https://github.com/toprakkulekcioglu/adli-imaj-projesi) / [remote-forensic-imager](https://github.com/adli-imaj/remote-forensic-imager).
-- `engines/ram_engine/` — hedef Windows makinede yerel olarak çalışan, fiziksel RAM imajı alan araç (kaynak kod dahil değil, sadece derlenmiş hali).
+Birden fazla alma yöntemini tek bir arayüzde toplar:
 
-Her yöntem kendi haliyle korunuyor, launcher hangisinin çalıştırılacağını seçtiriyor. `ssh_engine` uzak bir Linux sunucuyu hedefler; `ram_engine` ise SSH gerektirmez, doğrudan bu makinede çalışır.
+- `engines/ssh_engine/` — ağ üzerinden erişilebilen bir **Linux ya da
+  Windows** bilgisayardan SSH ile disk/dosya imajı alır. Hedefe nasıl
+  ulaşıldığına göre üç bağlantı yöntemi destekler: Doğrudan/Port
+  Yönlendirme, VPN, ve hiçbir ağ erişimi olmadığı en zor durumlar için
+  Tor Hidden Service ("acil kapı").
+- `engines/ram_engine/` — bu makinenin kendi belleğini (RAM) yerel olarak
+  imaj alır (kaynak kodu dahil değil, sadece derlenmiş hali).
+- `engines/portable_kit/` — SSH erişimi hiç olmayan hedefler için sahaya
+  götürülen taşınabilir kit'in Tor tarafı.
+
+Her yöntemin kendi tanıtım sayfası vardır (ne işe yaradığı, ne zaman
+kullanılacağı, gerekenler, adım adım kullanım). Özelliklerin tam listesi
+için: [docs/ozellikler.md](docs/ozellikler.md).
 
 ## Çalıştırma
+
+**Geliştirme (kaynaktan):**
 
 ```bash
 pip install -r requirements.txt -r engines/ssh_engine/requirements.txt
 python launcher/chameleon_gui.py
 ```
 
-Açılan ekrandan dil ve yöntem seçilir, seçilen motor ayrı bir pencerede başlar. RAM motoru sadece Windows'ta çalışır; tam RAM imajı almak Yönetici yetkisi ve `engines/ram_engine/INSTALL.txt`'teki test-signing adımlarını gerektirir.
+**Son kullanıcı (tek exe):** `pyinstaller build.spec` ile üretilen
+`dist/Chameleon.exe` çift tıkla açılır, Python kurulumu gerekmez.
+
+Açılan pencerede sol menüden bir yöntem seçilir; RAM motoru sadece
+Windows'ta çalışır, tam RAM imajı almak Yönetici yetkisi ve
+`engines/ram_engine/INSTALL.txt`'teki test-signing adımlarını gerektirir.
 
 ## Planlanan işler
 

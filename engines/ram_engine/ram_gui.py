@@ -1,9 +1,10 @@
 """
 ram_gui.py
 RAM motoru arayuzu -- vendor'in kendi RamImagerGUI.exe'si (WinForms,
-bizim temamizdan habersiz) yerine, RamImagerCLI.exe'yi dogrudan
-subprocess ile cagiran, chameleon'un CTk temasiyla uyumlu kendi
-arayuzumuz.
+bizim temamizdan habersiz) yerine, RamImagerCLI.exe'yi dogrudan subprocess
+ile cagiran, PySide6 ile yazilmis kendi arayuzumuz. Worker thread
+(RamWorker) RamImagerCLI.exe cagrisini/ShellExecute yukseltmeyi/log
+tail'lemeyi yurutup UI'ye Qt sinyalleriyle haber verir.
 
 RamImagerCLI.exe/RamImagerDriver.sys kaynagi bizde yok (derlenmis hali
 verildi), bu yuzden onlarin davranisini degistirmiyoruz -- sadece nasil
@@ -11,15 +12,20 @@ cagirdigimizi ve sonucu nasil gosterdigimizi degistiriyoruz.
 """
 
 import csv
+import ctypes
+import hashlib
 import io
+import json
 import os
 import subprocess
 import sys
-import threading
 import time
 
-import customtkinter as ctk
-from tkinter import filedialog
+from PySide6.QtCore import QThread, Signal
+from PySide6.QtWidgets import (
+    QButtonGroup, QComboBox, QDialog, QFileDialog, QHBoxLayout, QLabel,
+    QMainWindow, QPlainTextEdit, QVBoxLayout, QWidget,
+)
 
 RAM_ENGINE_DIR = os.path.dirname(os.path.abspath(__file__))
 CLI_PATH = os.path.join(RAM_ENGINE_DIR, "cli", "RamImagerCLI.exe")
@@ -28,22 +34,24 @@ DRIVER_PATH = os.path.join(RAM_ENGINE_DIR, "driver", "RamImagerDriver.sys")
 _SHARED_DIR = os.path.join(RAM_ENGINE_DIR, "..", "..", "shared")
 if os.path.isdir(_SHARED_DIR):
     sys.path.insert(0, _SHARED_DIR)
+from ui_kit import theme_qt as ui, fonts, icons, widgets  # noqa: E402
+
 try:
-    from theme import (
-        BG_MAIN, BG_PANEL, TEXT_MAIN, TEXT_SECONDARY, ACCENT, ACCENT_HOVER, ERROR, BORDER, OK,
-    )
+    from forensic_report import ForensicReport
 except ImportError:
-    BG_MAIN, BG_PANEL = "#F5F5F3", "#FFFFFF"
-    TEXT_MAIN, TEXT_SECONDARY = "#2B2B2B", "#6B6B6B"
-    ACCENT, ACCENT_HOVER, ERROR, BORDER, OK = "#3B5D6B", "#2C4650", "#A64545", "#DADAD8", "#3F7D57"
+    ForensicReport = None
+
+_COC_DIR = os.path.join(RAM_ENGINE_DIR, "..", "ssh_engine", "local_collector")
+if os.path.isdir(_COC_DIR):
+    sys.path.insert(0, _COC_DIR)
+try:
+    import chain_of_custody as coc
+except ImportError:
+    coc = None
 
 
 def list_processes():
-    """
-    'tasklist' ile calisan process'leri (isim, PID) dondurur -- ek bir
-    kutuphane (orn. psutil) eklemeden, Windows'ta zaten var olan komutu
-    kullaniyoruz.
-    """
+    """AYNEN tasindi (ram_gui.py) -- tasklist ile calisan process listesi."""
     try:
         out = subprocess.check_output(
             ["tasklist", "/fo", "csv", "/nh"],
@@ -59,239 +67,113 @@ def list_processes():
     return sorted(sonuc, key=lambda x: x[0].lower())
 
 
-class RamEngineGUI:
-    def __init__(self, root, on_back=None):
-        """
-        root: bu ekranin cizilecegi widget (ssh_engine/gui_v2.py'deki
-        ForensicGUI ile ayni desen -- launcher'dan gomulebilir, tek basina
-        da calisabilir).
-        """
-        self.root = root
-        self.on_back = on_back
-        self.root.configure(fg_color=BG_MAIN)
-        self._proc = None
-        self._log_poll_stop = False
-        self._build_ui()
-        self._refresh_processes()
+class ProcessListWorker(QThread):
+    ready = Signal(list)
 
-    # -- UI ------------------------------------------------------------
-    def _card(self, parent, title):
-        outer = ctk.CTkFrame(
-            parent, fg_color=BG_PANEL, border_color=BORDER, border_width=1, corner_radius=10,
-        )
-        outer.pack(fill="x", padx=12, pady=6)
-        ctk.CTkLabel(
-            outer, text=title, font=("Segoe UI", 12, "bold"), text_color=ACCENT, anchor="w",
-        ).pack(fill="x", padx=14, pady=(12, 2))
-        inner = ctk.CTkFrame(outer, fg_color="transparent")
-        inner.pack(fill="both", expand=True, padx=14, pady=(0, 14))
-        return inner
+    def run(self):
+        self.ready.emit(list_processes())
 
-    def _build_ui(self):
-        header = ctk.CTkFrame(self.root, fg_color=ACCENT, height=48, corner_radius=0)
-        header.pack(fill="x")
-        if self.on_back:
-            ctk.CTkButton(
-                header, text="< Geri", command=self.on_back, width=70,
-                fg_color=ACCENT, hover_color=ACCENT_HOVER,
-            ).pack(side="left", padx=(12, 0), pady=8)
-        ctk.CTkLabel(
-            header, text="RAM İmajı Al", font=("Segoe UI", 14, "bold"), text_color="white",
-        ).pack(side="left", padx=15, pady=8)
 
-        # === Mod secimi ===
-        mode_card = self._card(self.root, "Mod")
-        self.mode_var = ctk.StringVar(value="process")
-        ctk.CTkRadioButton(
-            mode_card, text="Process Dump (sürücü gerekmez, hemen çalışır)",
-            variable=self.mode_var, value="process", fg_color=ACCENT, text_color=TEXT_MAIN,
-            command=self._on_mode_change,
-        ).grid(row=0, column=0, sticky="w", pady=4, padx=(0, 20))
-        ctk.CTkRadioButton(
-            mode_card, text="Full RAM (Yönetici + sürücü gerekir)",
-            variable=self.mode_var, value="full", fg_color=ACCENT, text_color=TEXT_MAIN,
-            command=self._on_mode_change,
-        ).grid(row=0, column=1, sticky="w", pady=4)
+class RamWorker(QThread):
+    """
+    _run_process_mode/_run_full_mode/_tail_log'un tasindigi yer. Govdeler
+    ram_gui.py'deki ile BIREBIR AYNI -- degisen tek sey, widget'lara
+    dogrudan dokunmak yerine sinyal yaymalari (thread-guvenli Qt koprusu).
+    """
+    log = Signal(str)
+    status = Signal(str, str)  # (metin, renk_hex)
+    report_ready = Signal(object, str)  # (ForensicReport, report_path)
 
-        # === Process modu alanlari ===
-        self.process_card = self._card(self.root, "Process Dump")
-        ctk.CTkLabel(self.process_card, text="Process:", text_color=TEXT_MAIN).grid(
-            row=0, column=0, sticky="w", pady=4
-        )
-        self.process_var = ctk.StringVar()
-        self.process_combo = ctk.CTkComboBox(
-            self.process_card, variable=self.process_var, width=340, values=[],
-        )
-        self.process_combo.grid(row=0, column=1, padx=6, pady=4, sticky="w")
-        ctk.CTkButton(
-            self.process_card, text="Yenile", command=self._refresh_processes, width=80,
-            fg_color=BG_PANEL, border_width=1, border_color=BORDER,
-            text_color=TEXT_MAIN, hover_color=BG_MAIN,
-        ).grid(row=0, column=2, padx=6, pady=4)
+    def __init__(self, mode, args, out_path, case, examiner, custodian, process_label=None, parent=None):
+        super().__init__(parent)
+        self.mode = mode
+        self.args = args
+        self.out_path = out_path
+        self.case = case
+        self.examiner = examiner
+        self.custodian = custodian
+        self.process_label = process_label
 
-        # === Full mod alanlari ===
-        self.full_card = self._card(self.root, "Full RAM")
-        ctk.CTkLabel(self.full_card, text="Case:", text_color=TEXT_MAIN).grid(
-            row=0, column=0, sticky="w", pady=4
-        )
-        self.entry_case = ctk.CTkEntry(self.full_card, width=200)
-        self.entry_case.grid(row=0, column=1, padx=6, pady=4, sticky="w")
-        ctk.CTkLabel(self.full_card, text="Examiner:", text_color=TEXT_MAIN).grid(
-            row=0, column=2, sticky="w", pady=4
-        )
-        self.entry_examiner = ctk.CTkEntry(self.full_card, width=200)
-        self.entry_examiner.grid(row=0, column=3, padx=6, pady=4, sticky="w")
-        ctk.CTkLabel(
-            self.full_card,
-            text="Yönetici olarak çalıştırılmalı; imzasız sürücü için Secure Boot kapatma +\n"
-                 "test-signing + yeniden başlatma gerekir (bkz. engines/ram_engine/INSTALL.txt).",
-            text_color=ERROR, font=("Segoe UI", 10), justify="left",
-        ).grid(row=1, column=0, columnspan=4, sticky="w", pady=(6, 0))
-
-        # === Cikti ===
-        out_card = self._card(self.root, "Çıktı")
-        ctk.CTkLabel(out_card, text="Dosya:", text_color=TEXT_MAIN).grid(
-            row=0, column=0, sticky="w", pady=4
-        )
-        self.entry_out = ctk.CTkEntry(out_card, width=420)
-        self.entry_out.grid(row=0, column=1, padx=6, pady=4, sticky="w")
-        default_out = os.path.join(os.environ.get("TEMP", "."), "ram_dump.dmp")
-        self.entry_out.insert(0, default_out)
-        ctk.CTkButton(
-            out_card, text="Gözat", command=self._browse_out, width=80,
-            fg_color=BG_PANEL, border_width=1, border_color=BORDER,
-            text_color=TEXT_MAIN, hover_color=BG_MAIN,
-        ).grid(row=0, column=2, padx=6, pady=4)
-
-        # === Baslat + durum ===
-        btn_frame = ctk.CTkFrame(self.root, fg_color="transparent")
-        btn_frame.pack(fill="x", padx=12, pady=6)
-        self.btn_start = ctk.CTkButton(
-            btn_frame, text="Başlat", command=self._start, fg_color=ACCENT, hover_color=ACCENT_HOVER,
-        )
-        self.btn_start.pack(side="left", padx=5)
-        self.status_label = ctk.CTkLabel(btn_frame, text="Hazır", text_color=TEXT_SECONDARY)
-        self.status_label.pack(side="left", padx=10)
-
-        # === Gunluk ===
-        log_inner = self._card(self.root, "Günlük")
-        log_inner.pack_configure(expand=True)
-        self.txt_log = ctk.CTkTextbox(
-            log_inner, fg_color="#1e1e1e", text_color="#dcdcdc", font=("Consolas", 10),
-        )
-        self.txt_log.pack(fill="both", expand=True)
-        self.txt_log.configure(state="disabled")
-
-        self._on_mode_change()
-
-    # -- Yardimci --------------------------------------------------------
-    def _log(self, msg):
-        def _append():
-            self.txt_log.configure(state="normal")
-            self.txt_log.insert("end", msg + "\n")
-            self.txt_log.see("end")
-            self.txt_log.configure(state="disabled")
-        self.root.after(0, _append)
-
-    def _on_mode_change(self):
-        if self.mode_var.get() == "process":
-            self.process_card.master.pack(fill="x", padx=12, pady=6)
-            self.full_card.master.pack_forget()
+    def run(self):
+        if self.mode == "process":
+            self._run_process_mode()
         else:
-            self.full_card.master.pack(fill="x", padx=12, pady=6)
-            self.process_card.master.pack_forget()
+            self._run_full_mode()
 
-    def _refresh_processes(self):
-        def worker():
-            islemler = list_processes()
-            values = [f"{ad} (PID {pid})" for ad, pid in islemler]
-            self._pid_map = {f"{ad} (PID {pid})": pid for ad, pid in islemler}
-
-            def _update():
-                self.process_combo.configure(values=values)
-                if values:
-                    self.process_var.set(values[0])
-            self.root.after(0, _update)
-        threading.Thread(target=worker, daemon=True).start()
-
-    def _browse_out(self):
-        ext = ".dmp" if self.mode_var.get() == "process" else ".img"
-        path = filedialog.asksaveasfilename(
-            title="Çıktı Dosyası Seç", defaultextension=ext,
-            filetypes=[(f"{ext[1:].upper()} dosyası", f"*{ext}"), ("Tüm Dosyalar", "*.*")],
+    def _new_report(self, method, source_identifier):
+        if ForensicReport is None:
+            return None
+        report = ForensicReport(case_id=self.case, examiner=self.examiner, custodian=self.custodian)
+        report.start(
+            engine="ram_engine", method=method, target_os="windows", target_host="localhost",
+            source_identifier=source_identifier,
         )
-        if path:
-            self.entry_out.delete(0, "end")
-            self.entry_out.insert(0, path)
+        report.set_write_blocking(False, "RAM imajlama icin write-blocking kavrami gecerli degil")
+        return report
 
-    # -- Calistirma --------------------------------------------------------
-    def _start(self):
-        if not os.path.isfile(CLI_PATH):
-            self.status_label.configure(text=f"RamImagerCLI.exe bulunamadı: {CLI_PATH}", text_color=ERROR)
-            return
+    def _save_report(self, report, output_dir):
+        if report is None:
+            return None
+        try:
+            path = report.save(output_dir)
+            self.log.emit(f"Rapor: {path}")
+            return path
+        except OSError as exc:
+            self.log.emit(f"[UYARI] Rapor yazilamadi: {exc}")
+            return None
 
-        out_path = self.entry_out.get().strip()
-        if not out_path:
-            self.status_label.configure(text="Çıktı dosyası seçin.", text_color=ERROR)
-            return
+    def _run_process_mode(self):
+        """AYNEN tasindi -- process modu yukseltme gerektirmedigi icin
+        stdout dogrudan okunabilir. RamImagerCLI process modunda hash
+        uretmiyor, dosyayi kendimiz hashliyoruz."""
+        args, out_path, process_label = self.args, self.out_path, self.process_label
+        report = self._new_report("ram_process", process_label)
+        if coc:
+            coc.log_event(coc.EVENT_EXAM_START, f"RAM process dump baslatildi: {process_label}")
 
-        self.btn_start.configure(state="disabled")
-        self.status_label.configure(text="Çalışıyor...", text_color=TEXT_SECONDARY)
-
-        if self.mode_var.get() == "process":
-            secim = self.process_var.get()
-            pid = self._pid_map.get(secim)
-            if not pid:
-                self.status_label.configure(text="Bir process seçin.", text_color=ERROR)
-                self.btn_start.configure(state="normal")
-                return
-            args = [CLI_PATH, "process", "--pid", pid, "--output", out_path]
-            threading.Thread(target=self._run_process_mode, args=(args,), daemon=True).start()
-        else:
-            case = self.entry_case.get().strip()
-            examiner = self.entry_examiner.get().strip()
-            args = [CLI_PATH, "full", "--output", out_path, "--driver", DRIVER_PATH]
-            if case:
-                args += ["--case", case]
-            if examiner:
-                args += ["--examiner", examiner]
-            threading.Thread(target=self._run_full_mode, args=(args, out_path), daemon=True).start()
-
-    def _run_process_mode(self, args):
-        """
-        process modu yukseltme (Yonetici) gerektirmedigi icin stdout
-        dogrudan okunabilir -- PROJE_DOKUMANI.md'deki GUI mimarisiyle
-        ayni desen.
-        """
-        self._log(f"$ {' '.join(args)}")
+        self.log.emit(f"$ {' '.join(args)}")
         try:
             proc = subprocess.Popen(
                 args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                 text=True, creationflags=subprocess.CREATE_NO_WINDOW,
             )
             for line in proc.stdout:
-                self._log(line.rstrip("\n"))
+                self.log.emit(line.rstrip("\n"))
             exit_code = proc.wait()
         except OSError as exc:
-            self._log(f"Başlatılamadı: {exc}")
+            self.log.emit(f"Başlatılamadı: {exc}")
             exit_code = -1
 
-        if exit_code == 0:
-            self.status_label.configure(text="Tamamlandı.", text_color=OK)
+        if exit_code == 0 and os.path.exists(out_path):
+            self.status.emit("Tamamlandı.", ui.SUCCESS)
+            if coc:
+                coc.log_event(coc.EVENT_EXAM_END, f"RAM process dump tamamlandi: {out_path}")
+            if report:
+                dosya_hash = None
+                try:
+                    with open(out_path, "rb") as f:
+                        dosya_hash = hashlib.sha256(f.read()).hexdigest()
+                except OSError:
+                    pass
+                report.finish(
+                    status="success", output_path=out_path, image_hash=dosya_hash,
+                    total_bytes=os.path.getsize(out_path) if os.path.exists(out_path) else None,
+                )
+                rapor_yolu = self._save_report(report, os.path.dirname(out_path) or ".")
+                self.report_ready.emit(report, rapor_yolu)
         else:
-            self.status_label.configure(text=f"Başarısız (kod {exit_code}).", text_color=ERROR)
-        self.btn_start.configure(state="normal")
+            self.status.emit(f"Başarısız (kod {exit_code}).", ui.ERROR)
+            if coc:
+                coc.log_event(coc.EVENT_EXAM_ERROR, f"RAM process dump basarisiz (kod {exit_code}): {process_label}")
+            if report:
+                report.finish(status="failed", output_path=out_path)
+                self._save_report(report, os.path.dirname(out_path) or ".")
 
-    def _run_full_mode(self, args, out_path):
-        """
-        full modu Yonetici gerektirir; Windows yukseltilmis bir surecin
-        stdout'unu ana surece dogrudan aktarmaya izin vermez (ayni kisit
-        vendor GUI'sinde de var, bkz. PROJE_DOKUMANI.md 4.4). Bu yuzden
-        ShellExecute 'runas' ile yukseltip, ilerlemeyi CLI'nin urettigi
-        <output>.log dosyasini periyodik okuyarak (tail) gosteriyoruz.
-        """
-        import ctypes
-
+    def _run_full_mode(self):
+        """AYNEN tasindi -- full mod Yonetici gerektirir; ShellExecute
+        'runas' ile yukseltip ilerlemeyi <output>.log dosyasini tail'leyerek
+        gosteriyoruz (yukseltilmis surecin stdout'u ana surece aktarilamaz)."""
+        args, out_path = self.args, self.out_path
         log_path = out_path + ".log"
         try:
             if os.path.exists(log_path):
@@ -299,26 +181,27 @@ class RamEngineGUI:
         except OSError:
             pass
 
-        self._log(f"$ {' '.join(args)} (Yönetici olarak, UAC istemi gelecek)")
+        self.log.emit(f"$ {' '.join(args)} (Yönetici olarak, UAC istemi gelecek)")
         try:
             params = " ".join(f'"{a}"' if " " in a else a for a in args[1:])
             result = ctypes.windll.shell32.ShellExecuteW(None, "runas", args[0], params, None, 1)
             if result <= 32:
-                self._log(f"Yükseltme başarısız (kod {result}) -- UAC reddedildi olabilir.")
-                self.status_label.configure(text="Başlatılamadı / UAC reddedildi.", text_color=ERROR)
-                self.btn_start.configure(state="normal")
+                self.log.emit(f"Yükseltme başarısız (kod {result}) -- UAC reddedildi olabilir.")
+                self.status.emit("Başlatılamadı / UAC reddedildi.", ui.ERROR)
                 return
         except Exception as exc:
-            self._log(f"Başlatılamadı: {exc}")
-            self.status_label.configure(text="Başlatılamadı.", text_color=ERROR)
-            self.btn_start.configure(state="normal")
+            self.log.emit(f"Başlatılamadı: {exc}")
+            self.status.emit("Başlatılamadı.", ui.ERROR)
             return
 
         self._tail_log(log_path, out_path)
 
     def _tail_log(self, log_path, out_path):
-        """log_path'i periyodik okuyup yeni satirlari gosterir, ciktinin
-        (.img dosyasinin) belirmesini bitis isareti sayar."""
+        """AYNEN tasindi -- log_path'i periyodik okuyup yeni satirlari
+        gosterir, ciktinin (.img dosyasinin) belirmesini bitis isareti sayar."""
+        if coc:
+            coc.log_event(coc.EVENT_EXAM_START, f"RAM full imaj baslatildi: {out_path}")
+
         last_size = 0
         waited = 0
         while waited < 3600:  # full RAM uzun surebilir, 1 saate kadar bekle
@@ -331,23 +214,350 @@ class RamEngineGUI:
                         yeni = f.read()
                         last_size = f.tell()
                     if yeni:
-                        self._log(yeni.rstrip("\n"))
+                        self.log.emit(yeni.rstrip("\n"))
                 except OSError:
                     pass
             if os.path.exists(out_path) and os.path.exists(out_path + ".json"):
                 break
 
-        if os.path.exists(out_path) and os.path.exists(out_path + ".json"):
-            self.status_label.configure(text="Tamamlandı.", text_color=OK)
+        basarili = os.path.exists(out_path) and os.path.exists(out_path + ".json")
+        report = self._new_report("ram_full", "PhysicalMemory (full)")
+
+        if basarili:
+            self.status.emit("Tamamlandı.", ui.SUCCESS)
+            vendor_hash = None
+            vendor_bytes = None
+            try:
+                with open(out_path + ".json", "r", encoding="utf-8") as f:
+                    vendor_meta = json.load(f)
+                vendor_hash = vendor_meta.get("sha256")
+                vendor_bytes = vendor_meta.get("size") or vendor_meta.get("total_size")
+            except (OSError, json.JSONDecodeError) as exc:
+                self.log.emit(f"[UYARI] RamImagerCLI metadata okunamadi: {exc}")
+
+            if coc:
+                coc.log_event(coc.EVENT_EXAM_END, f"RAM full imaj tamamlandi: {out_path}", vendor_hash)
+            if report:
+                report.finish(
+                    status="success", output_path=out_path, image_hash=vendor_hash,
+                    total_bytes=vendor_bytes or (os.path.getsize(out_path) if os.path.exists(out_path) else None),
+                )
+                rapor_yolu = self._save_report(report, os.path.dirname(out_path) or ".")
+                self.report_ready.emit(report, rapor_yolu)
         else:
-            self.status_label.configure(text="Bitmedi ya da hata oluştu, günlüğe bakın.", text_color=ERROR)
-        self.btn_start.configure(state="normal")
+            self.status.emit("Bitmedi ya da hata oluştu, günlüğe bakın.", ui.ERROR)
+            if coc:
+                coc.log_event(coc.EVENT_EXAM_ERROR, f"RAM full imaj basarisiz/tamamlanamadi: {out_path}")
+            if report:
+                report.finish(status="failed", output_path=out_path)
+                self._save_report(report, os.path.dirname(out_path) or ".")
+
+
+class RamEngineWidget(QWidget):
+    def __init__(self, on_back=None, initial_case_id="", initial_examiner="",
+                 initial_custodian="", parent=None):
+        super().__init__(parent)
+        self.on_back = on_back
+        self._pid_map = {}
+        self.worker = None
+        self._build_ui(initial_case_id, initial_examiner, initial_custodian)
+        self._refresh_processes()
+
+    # -- UI ------------------------------------------------------------
+    def _build_ui(self, initial_case_id, initial_examiner, initial_custodian):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 16, 20, 16)
+        layout.setSpacing(ui.CARD_GAP)
+
+        header = QHBoxLayout()
+        if self.on_back:
+            back_btn = widgets.SecondaryButton("← Geri")
+            back_btn.clicked.connect(self.on_back)
+            header.addWidget(back_btn)
+        title = QLabel("RAM İmajı Al")
+        title.setStyleSheet(f"color:{ui.TEXT_MAIN}; font-family:'{ui.FONT_UI}'; font-size:{ui.SIZE_TITLE}px; font-weight:600;")
+        header.addWidget(title)
+        header.addStretch()
+        layout.addLayout(header)
+
+        # === Vaka Bilgileri ===
+        vaka = widgets.Card("Vaka Bilgileri")
+        vaka.body.addWidget(self._note("(İsteğe bağlı -- rapor üretmiyorsanız boş bırakabilirsiniz)"))
+        self.entry_case = self._labeled_input(vaka.body, "Vaka No", initial_case_id)
+        self.entry_examiner = self._labeled_input(vaka.body, "İnceleyen", initial_examiner)
+        self.entry_custodian = self._labeled_input(vaka.body, "Cihaz Sahibi / Yetkili Kişi", initial_custodian)
+        layout.addWidget(vaka)
+
+        # === Mod secimi ===
+        mode_card = widgets.Card("Mod")
+        mode_row = QHBoxLayout()
+        self.mode_group = QButtonGroup(self)
+        self.radio_process = widgets.RadioButton("Process Dump (sürücü gerekmez, hemen çalışır)")
+        self.radio_full = widgets.RadioButton("Full RAM (Yönetici + sürücü gerekir)")
+        self.radio_process.setChecked(True)
+        for r in (self.radio_process, self.radio_full):
+            self.mode_group.addButton(r)
+            mode_row.addWidget(r)
+        mode_row.addStretch()
+        mode_card.body.addLayout(mode_row)
+        self.radio_process.toggled.connect(self._on_mode_change)
+        layout.addWidget(mode_card)
+
+        # === Process modu alanlari ===
+        self.process_card = widgets.Card("Process Dump")
+        proc_row = QHBoxLayout()
+        proc_row.addWidget(QLabel("Process:"))
+        self.process_combo = QComboBox()
+        self.process_combo.setMinimumWidth(340)
+        self.process_combo.setStyleSheet(f"""
+            QComboBox {{
+                background-color: {ui.BG_LAYER2}; color: {ui.TEXT_MAIN};
+                border: 1px solid {ui.BORDER}; border-radius: {ui.RADIUS}px; padding: 4px 8px;
+            }}
+        """)
+        proc_row.addWidget(self.process_combo)
+        refresh_btn = widgets.SecondaryButton("Yenile")
+        refresh_btn.clicked.connect(self._refresh_processes)
+        proc_row.addWidget(refresh_btn)
+        proc_row.addStretch()
+        self.process_card.body.addLayout(proc_row)
+        layout.addWidget(self.process_card)
+
+        # === Full mod alanlari ===
+        self.full_card = widgets.Card("Full RAM")
+        warn = QLabel(
+            "Yönetici olarak çalıştırılmalı; imzasız sürücü için Secure Boot kapatma + "
+            "test-signing + yeniden başlatma gerekir (bkz. engines/ram_engine/INSTALL.txt)."
+        )
+        warn.setWordWrap(True)
+        warn.setStyleSheet(f"color:{ui.ERROR}; font-family:'{ui.FONT_UI}'; font-size:{ui.SIZE_HELPER}px;")
+        self.full_card.body.addWidget(warn)
+        layout.addWidget(self.full_card)
+        self.full_card.hide()
+
+        # === Cikti ===
+        out_card = widgets.Card("Çıktı")
+        out_row = QHBoxLayout()
+        out_row.addWidget(QLabel("Dosya:"))
+        self.entry_out = widgets.MonoInput()
+        default_out = os.path.join(os.environ.get("TEMP", "."), "ram_dump.dmp")
+        self.entry_out.setText(default_out)
+        out_row.addWidget(self.entry_out, stretch=1)
+        browse_btn = widgets.SecondaryButton("Gözat")
+        browse_btn.clicked.connect(self._browse_out)
+        out_row.addWidget(browse_btn)
+        out_card.body.addLayout(out_row)
+        layout.addWidget(out_card)
+
+        # === Baslat + durum + ilerleme ===
+        start_row = QHBoxLayout()
+        self.btn_start = widgets.PrimaryButton("Başlat")
+        self.btn_start.clicked.connect(self._start)
+        start_row.addWidget(self.btn_start)
+        self.status_label = QLabel("Hazır")
+        self.status_label.setStyleSheet(f"color:{ui.TEXT_SECONDARY}; font-family:'{ui.FONT_UI}'; font-size:{ui.SIZE_HELPER}px;")
+        start_row.addWidget(self.status_label)
+        start_row.addStretch()
+        layout.addLayout(start_row)
+
+        self.progress = widgets.ProgressBar()
+        self.progress.hide()
+        layout.addWidget(self.progress)
+
+        # === Gunluk ===
+        log_card = widgets.Card("Günlük")
+        self.txt_log = QPlainTextEdit()
+        self.txt_log.setReadOnly(True)
+        self.txt_log.setMinimumHeight(200)
+        self.txt_log.setStyleSheet(f"""
+            QPlainTextEdit {{
+                background-color: #0A0E14; color: {ui.TEXT_MAIN};
+                font-family: "{ui.FONT_MONO}"; font-size: 11px;
+                border: 1px solid {ui.BORDER}; border-radius: {ui.RADIUS}px;
+            }}
+        """)
+        log_card.body.addWidget(self.txt_log)
+        layout.addWidget(log_card, stretch=1)
+
+        self._on_mode_change()
+
+    def _note(self, text):
+        lbl = QLabel(text)
+        lbl.setStyleSheet(f"color:{ui.TEXT_SECONDARY}; font-family:'{ui.FONT_UI}'; font-size:{ui.SIZE_HELPER}px; font-style: italic;")
+        return lbl
+
+    def _labeled_input(self, body_layout, label_text, initial_value):
+        row = QHBoxLayout()
+        lbl = QLabel(f"{label_text}:")
+        lbl.setFixedWidth(180)
+        lbl.setStyleSheet(f"color:{ui.TEXT_MAIN}; font-family:'{ui.FONT_UI}'; font-size:{ui.SIZE_BODY}px;")
+        row.addWidget(lbl)
+        entry = widgets.Input()
+        entry.setText(initial_value)
+        row.addWidget(entry)
+        row.addStretch()
+        body_layout.addLayout(row)
+        return entry
+
+    # -- Yardimci --------------------------------------------------------
+    def _log(self, msg):
+        self.txt_log.appendPlainText(msg)
+
+    def _set_status(self, text, color=None):
+        self.status_label.setText(text)
+        self.status_label.setStyleSheet(
+            f"color:{color or ui.TEXT_SECONDARY}; font-family:'{ui.FONT_UI}'; font-size:{ui.SIZE_HELPER}px;"
+        )
+
+    def _on_mode_change(self):
+        if self.radio_process.isChecked():
+            self.process_card.show()
+            self.full_card.hide()
+        else:
+            self.full_card.show()
+            self.process_card.hide()
+
+    def _refresh_processes(self):
+        self._proc_worker = ProcessListWorker(self)
+        self._proc_worker.ready.connect(self._on_processes_ready)
+        self._proc_worker.start()
+
+    def _on_processes_ready(self, islemler):
+        self._pid_map = {f"{ad} (PID {pid})": pid for ad, pid in islemler}
+        self.process_combo.clear()
+        self.process_combo.addItems(list(self._pid_map.keys()))
+
+    def _browse_out(self):
+        ext = ".dmp" if self.radio_process.isChecked() else ".img"
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Çıktı Dosyası Seç", self.entry_out.text(), f"{ext[1:].upper()} dosyası (*{ext});;Tüm Dosyalar (*.*)",
+        )
+        if path:
+            self.entry_out.setText(path)
+
+    # -- Calistirma --------------------------------------------------------
+    def _start(self):
+        if not os.path.isfile(CLI_PATH):
+            self._set_status(f"RamImagerCLI.exe bulunamadı: {CLI_PATH}", ui.ERROR)
+            return
+
+        out_path = self.entry_out.text().strip()
+        if not out_path:
+            self._set_status("Çıktı dosyası seçin.", ui.ERROR)
+            return
+
+        case = self.entry_case.text().strip()
+        examiner = self.entry_examiner.text().strip()
+        custodian = self.entry_custodian.text().strip()
+
+        self.btn_start.setEnabled(False)
+        self._set_status("Çalışıyor...")
+        self.progress.show()
+        self.progress.set_indeterminate()
+
+        if self.radio_process.isChecked():
+            secim = self.process_combo.currentText()
+            pid = self._pid_map.get(secim)
+            if not pid:
+                self._set_status("Bir process seçin.", ui.ERROR)
+                self.btn_start.setEnabled(True)
+                self.progress.hide()
+                return
+            args = [CLI_PATH, "process", "--pid", pid, "--output", out_path]
+            self.worker = RamWorker("process", args, out_path, case, examiner, custodian, process_label=secim)
+        else:
+            args = [CLI_PATH, "full", "--output", out_path, "--driver", DRIVER_PATH]
+            if case:
+                args += ["--case", case]
+            if examiner:
+                args += ["--examiner", examiner]
+            self.worker = RamWorker("full", args, out_path, case, examiner, custodian)
+
+        self.worker.log.connect(self._log)
+        self.worker.status.connect(self._set_status)
+        self.worker.report_ready.connect(self._show_report_summary)
+        self.worker.finished.connect(self._on_worker_finished)
+        self.worker.start()
+
+    def _on_worker_finished(self):
+        self.btn_start.setEnabled(True)
+        self.progress.hide()
+
+    def _show_report_summary(self, report, report_path):
+        """gui_v2.py'deki ile ayni desen -- islem bitince delil zinciri
+        raporunu ozet olarak sunar, tam hali (report.html) icin buton verir."""
+        if report is None or report_path is None:
+            return
+
+        html_path = os.path.splitext(report_path)[0] + ".html"
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("İşlem Raporu")
+        dialog.resize(480, 340)
+        dialog.setStyleSheet(f"background-color:{ui.BG_DARKEST};")
+        layout = QVBoxLayout(dialog)
+
+        d = report.to_dict()
+        basarili = d["result"]["status"] == "success"
+        head = QLabel("✔ İşlem Tamamlandı" if basarili else f"İşlem Durumu: {d['result']['status']}")
+        head.setStyleSheet(
+            f"color:{ui.SUCCESS if basarili else ui.ERROR}; font-family:'{ui.FONT_UI}'; "
+            f"font-size:15px; font-weight:600;"
+        )
+        layout.addWidget(head)
+
+        image_hash = d["integrity"]["image_hash"] or ""
+        satirlar = [
+            ("Vaka No", d["case"]["case_id"] or "—"),
+            ("İnceleyen", d["case"]["examiner"] or "—"),
+            ("Cihaz Sahibi / Yetkili Kişi", d["case"]["custodian"] or "—"),
+            ("Kaynak", d["acquisition"]["source_identifier"] or "—"),
+            ("SHA-256", (image_hash[:24] + "…") if image_hash else "—"),
+            ("Sonuç", d["result"]["status"]),
+        ]
+        for etiket, deger in satirlar:
+            row = QHBoxLayout()
+            lbl = QLabel(f"{etiket}:")
+            lbl.setFixedWidth(170)
+            lbl.setStyleSheet(f"color:{ui.TEXT_SECONDARY}; font-family:'{ui.FONT_UI}'; font-size:{ui.SIZE_HELPER}px;")
+            row.addWidget(lbl)
+            val = QLabel(str(deger))
+            val.setWordWrap(True)
+            val.setStyleSheet(f"color:{ui.TEXT_MAIN}; font-family:'{ui.FONT_MONO}'; font-size:{ui.SIZE_HELPER}px;")
+            row.addWidget(val, stretch=1)
+            layout.addLayout(row)
+
+        layout.addStretch()
+        btns = QHBoxLayout()
+
+        def _open_html():
+            try:
+                os.startfile(html_path)
+            except Exception as e:
+                self._log(f"[UYARI] Rapor açılamadı: {e}")
+
+        open_btn = widgets.PrimaryButton("Raporu Aç (HTML)")
+        open_btn.clicked.connect(_open_html)
+        btns.addWidget(open_btn)
+        btns.addStretch()
+        close_btn = widgets.SecondaryButton("Kapat")
+        close_btn.clicked.connect(dialog.close)
+        btns.addWidget(close_btn)
+        layout.addLayout(btns)
+
+        dialog.exec()
 
 
 if __name__ == "__main__":
-    ctk.set_appearance_mode("dark")
-    root = ctk.CTk()
-    root.title("RAM İmajı Al")
-    root.geometry("780x640")
-    RamEngineGUI(root)
-    root.mainloop()
+    from PySide6.QtWidgets import QApplication
+
+    app = QApplication([])
+    fonts.register_fonts()
+    app.setStyleSheet(ui.base_stylesheet())
+
+    win = QMainWindow()
+    win.setWindowTitle("RAM İmajı Al")
+    win.resize(820, 720)
+    win.setCentralWidget(RamEngineWidget())
+    win.show()
+    sys.exit(app.exec())
