@@ -39,3 +39,4 @@ Windows'ta çalışır, tam RAM imajı almak Yönetici yetkisi ve
 ## Planlanan işler
 
 Bkz. [docs/roadmap.md](docs/roadmap.md).
+
