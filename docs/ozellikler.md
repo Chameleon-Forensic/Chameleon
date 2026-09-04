@@ -71,7 +71,11 @@ duruma göre değişir:
 - Kullanıcıdan gelen tüm değerler (disk yolu, dosya yolu vb.) uzak komutlara
   gömülmeden önce kaçırılır (shell/PowerShell enjeksiyonuna karşı).
 - SSH host key doğrulaması varsayılan olarak sıkı (strict) modda çalışır —
-  bilinmeyen bir sunucuya sessizce bağlanılmaz.
+  bilinmeyen bir sunucuya sessizce bağlanılmaz. Bunun mümkün olmadığı
+  durumlar için (örn. şahsa ait, ilk kez bağlanılan bir cihaz) "Doğrulamayı
+  atla" seçilebilir — bu modda bile sunucunun kimliği ilk bağlantıda
+  kaydedilir ve sonraki bağlantılarda karşılaştırılır; kimlik SONRADAN
+  değişirse (olası bir müdahale sinyali) bağlantı yine reddedilir.
 - Tor bağlantısında kimlik doğrulama (client authorization) zorunludur —
   `.onion` adresini ele geçiren biri, operatörün özel anahtarı olmadan
   bağlanamaz.
@@ -84,5 +88,21 @@ duruma göre değişir:
 - Sol menülü, her yöntemin kendi tanıtım sayfasına sahip olduğu bir arayüz —
   her sayfa ne işe yaradığını, ne zaman kullanılacağını, gerekenleri ve adım
   adım kullanımı anlatır.
+- **Bilgi Merkezi**: kafa karıştırıcı olabilecek kavramların (sunucu kimlik
+  doğrulama, Live/Offline Acquisition, delil zinciri, hash doğrulaması, RAM
+  Full modu, Tor/.onion/operatör anahtarı) sade dilde anlatıldığı ayrı bir
+  sayfa. İlgili ekranlardaki "Bu ne demek?" linkleri doğrudan o konuya götürür.
 - Tek bir `.exe` olarak paketlenebilir — kullanıcı Python kurmadan
   çalıştırabilir.
+
+## 6. Rol seçimi: operatör mü, hedef taraf mı?
+
+Uygulama açılışta önce "Bu bilgisayardaki kişi kimsiniz?" diye sorar:
+
+- **Operatörüm (İnceleyen)** — yukarıda anlatılan tüm araçlara (SSH/RAM
+  motorları, Bilgi Merkezi, Ayarlar) sahip normal ekran açılır.
+- **Bu Cihaz İnceleniyor** — sahada, teknik bilgisi olmayabilecek bir
+  kişi için: operatörün araç seti hiç gösterilmez, bunun yerine sadece 3
+  adımdan oluşan bir sihirbaz açılır (operatör anahtarını yapıştır →
+  bağlantıyı başlat → oluşan adresi operatöre ilet). Bu, Tor (Acil Durum)
+  yönteminde sahaya götürülen "taşınabilir kit"in arayüzüdür.

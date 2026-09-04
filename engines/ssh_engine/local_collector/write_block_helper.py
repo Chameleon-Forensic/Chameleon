@@ -29,6 +29,27 @@ def _run_blockdev(ssh, flag, disk_path, password):
     return ssh.run_command(f"sudo blockdev {flag} {safe_disk_path}", get_pty=True)
 
 
+def is_write_blocked(ssh, disk_path, password=None):
+    """
+    Diskin O ANDA salt-okunur olup olmadigini (blockdev --getro) SADECE
+    KONTROL EDER -- apply_write_block()'un aksine hicbir sey DEGISTIRMEZ.
+
+    Bir imaj alma islemi baglanti koparsa devam ettirilebiliyor (resume);
+    onceden disk salt-okunur yapilmis olsa bile, kopan baglanti bir
+    yeniden baslatmadan (reboot) kaynaklandiysa `blockdev --setro`
+    KALICI DEGILDIR -- disk aradan gecen surede tekrar yazilabilir hale
+    gelmis olabilir. Bu fonksiyon, "onceden oyleydi, hala oyledir"
+    varsayimini korumak yerine devam etmeden once GERCEKTEN dogrulamak
+    icin var (bkz. image_acquirer.py'deki resume mantigi).
+
+    Donus: True (salt-okunur), False (degil), None (kontrol edilemedi -- SSH hatasi).
+    """
+    getro_out, _err, _exit = _run_blockdev(ssh, "--getro", disk_path, password)
+    if getro_out is None:
+        return None
+    return getro_out.strip() == "1"
+
+
 def apply_write_block(ssh, disk_path, password=None):
     """
     Hedef diski (disk_path, orn. '/dev/sdb') SSH uzerinden salt-okunur yapar

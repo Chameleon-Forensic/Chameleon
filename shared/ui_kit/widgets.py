@@ -49,6 +49,10 @@ class PrimaryButton(QPushButton):
             QPushButton:hover {{ background-color: {t.ACCENT_HOVER}; }}
             QPushButton:pressed {{ background-color: #1D4ED8; }}
             QPushButton:disabled {{ background-color: {t.BG_LAYER2}; color: {t.TEXT_SECONDARY}; }}
+            /* Dolgu zaten ACCENT oldugu icin odak kenarligi da ayni mavi
+            tondan olursa (orn. ACCENT_TEXT) neredeyse hic secilmiyor
+            (olcum: 1.41:1) -- beyaz kenarlik burada ACCENT'e karsi 5.17:1. */
+            QPushButton:focus {{ border: 2px solid white; padding: 5px 17px; }}
         """)
 
 
@@ -72,6 +76,7 @@ class SecondaryButton(QPushButton):
             QPushButton:hover {{ background-color: {t.BG_LAYER2}; }}
             QPushButton:pressed {{ background-color: {t.BG_SURFACE}; }}
             QPushButton:disabled {{ color: {t.TEXT_SECONDARY}; border-color: {t.BG_LAYER2}; }}
+            QPushButton:focus {{ border: 2px solid {t.ACCENT_TEXT}; padding: 5px 17px; }}
         """)
 
 
@@ -90,7 +95,7 @@ class Input(QLineEdit):
         self.setMinimumHeight(32)
         self._apply_style(focused=False)
         self._glow = QGraphicsDropShadowEffect(self)
-        self._glow.setColor(QColor(t.ACCENT))
+        self._glow.setColor(QColor(t.ACCENT_TEXT))
         self._glow.setBlurRadius(0)
         self._glow.setOffset(0, 0)
         self.setGraphicsEffect(self._glow)
@@ -99,14 +104,21 @@ class Input(QLineEdit):
         return t.FONT_UI
 
     def _apply_style(self, focused):
-        border_color = t.ACCENT if focused else t.BORDER
+        # Odaklaninca kenarlik hem daha acik bir maviye (ACCENT_TEXT --
+        # duz ACCENT'in BG_LAYER2'ye karsi kontrasti 2.84:1'di, WCAG'in
+        # istedigi 3:1'in altinda kaliyordu) HEM de 1px'ten 2px'e cikiyor --
+        # odagin nerede oldugu artik dusuk gorusle de fark edilebiliyor.
+        border_color = t.ACCENT_TEXT if focused else t.BORDER
+        border_width = 2 if focused else 1
+        h_pad = 10 if focused else 11
+        v_pad = 3 if focused else 4
         self.setStyleSheet(f"""
             QLineEdit {{
                 background-color: {t.BG_LAYER2};
                 color: {t.TEXT_MAIN};
-                border: 1px solid {border_color};
+                border: {border_width}px solid {border_color};
                 border-radius: {t.RADIUS}px;
-                padding: 4px 10px;
+                padding: {v_pad}px {h_pad}px;
                 font-family: "{self._font_family()}";
                 font-size: {t.SIZE_BODY}px;
             }}
@@ -145,7 +157,14 @@ class MonoLabel(QLabel):
                 background: transparent;
             }}
         """)
-        self.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        # Onceden sadece fareyle secilebiliyordu -- islem sonunda gosterilen
+        # SHA-256 hash gibi degerleri klavye-only bir kullanici kopyalayamiyordu
+        # (erisilebilirlik denetiminde bulundu). Klavye odagi alabilmesi icin
+        # de FocusPolicy gerekiyor, TextInteractionFlags tek basina yetmiyor.
+        self.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse | Qt.TextInteractionFlag.TextSelectableByKeyboard
+        )
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
 
 # ---------------------------------------------------------------------------
@@ -165,11 +184,20 @@ class RadioButton(QAbstractButton):
         self.setCheckable(True)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setMinimumHeight(24)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
     def sizeHint(self):
         fm = self.fontMetrics()
         width = 22 + fm.horizontalAdvance(self.text()) + 8
         return type(self.minimumSize())(width, 24)
+
+    def focusInEvent(self, event):
+        super().focusInEvent(event)
+        self.update()
+
+    def focusOutEvent(self, event):
+        super().focusOutEvent(event)
+        self.update()
 
     def paintEvent(self, _event):
         painter = QPainter(self)
@@ -202,6 +230,18 @@ class RadioButton(QAbstractButton):
             outer_d + 8, 0, self.width() - outer_d - 8, self.height(),
             Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, self.text(),
         )
+
+        # Klavye odagi -- oncesinde HIC cizilmiyordu: Tab ile gezinirken
+        # hangi secenekte oldugunuz sadece secili (isChecked) olani
+        # degistirdikten SONRA belli oluyordu, odagin KENDISI hicbir
+        # zaman gorunmuyordu (erisilebilirlik denetiminde bulundu, WCAG
+        # 2.4.7 "Focus Visible"). Butun kontrolun etrafina ince, yuvarlak
+        # koseli bir cerceve cizerek duzeltildi.
+        if self.hasFocus():
+            painter.setPen(QPen(QColor(t.ACCENT_TEXT), 2))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            focus_rect = self.rect().adjusted(1, 1, -1, -1)
+            painter.drawRoundedRect(focus_rect, 4, 4)
         painter.end()
 
 
@@ -335,7 +375,7 @@ class Card(QFrame):
         if title:
             label = QLabel(title.upper())
             label.setStyleSheet(f"""
-                color: {t.ACCENT};
+                color: {t.ACCENT_TEXT};
                 font-family: "{t.FONT_UI}";
                 font-size: {t.SIZE_SECTION_LABEL}px;
                 font-weight: 600;

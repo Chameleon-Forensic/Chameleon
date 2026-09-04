@@ -171,11 +171,185 @@ güçlendiriyor). İkonlar app'in kendi Lucide SVG setinden (emoji değil).
 Mock SSH ile Linux+Windows listeleme, gezinme, loglama ve "bağlantı
 yokken Gözat" hata durumu test edildi; ekran görüntüsüyle doğrulandı.
 
+## 13. "Gözat" özelliği gerçek SSH hedefinde test edildi + exe yeniden derlendi
+Önceki oturumda mock SSH ile test edilen "Gözat" özelliği, bu kez WSL
+üzerinde gerçek bir SSH sunucusuna bağlanılarak (iç içe klasör gezinme,
+olmayan yol durumu, chain-of-custody loglaması) uçtan uca doğrulandı.
+Ardından güvenlik düzeltmeleri + Gözat özelliğiyle `dist/Chameleon.exe`
+yeniden derlendi, sağlıklı açılıp kapandığı doğrulandı.
+
+## 14. SSH bağlantı hataları artık nedene özgü + Sunucu Kimlik Doğrulama
+Kullanıcının "hata mesajı kişiye ne yapması gerektiğini söylemeli"
+geri bildirimini araştırırken asıl kök sebep bulundu: uygulama
+`RejectPolicy` kullandığı için, bilgiler doğru olsa bile daha önce hiç
+bağlanılmamış bir sunucuya (adli bilişimde asıl senaryo — özellikle
+şahsa ait cihazlarda parmak izini teyit edecek bir yetkili genelde
+olmuyor) bağlantı reddediliyordu, arayüzde bunu onaylatacak bir yol da
+yoktu. Çözüm: `ssh_connector.py`'nin `connect()`'i artık başarısızlık
+türünü sınıflandırıyor (host key / kimlik doğrulama / ulaşılamama /
+diğer), `gui_v2.py` her biri için ayrı, çözüm gösteren bir mesaj
+üretiyor. "SSH Bağlantı Bilgileri" kartına **"Sunucu Kimlik Doğrulama:
+Sıkı doğrula (önerilen) / Doğrulamayı atla"** seçeneği eklendi
+(varsayılan güvenli tarafta), atlanırsa delil zincirine ayrıca
+kaydediliyor. Gerçek bir SSH sunucusuna (WSL) karşı üç hata türü de
+ayrı ayrı test edildi.
+
+## 15. Bilgi Merkezi sayfası eklendi
+Kullanıcının "bazı seçimler kavramsal olarak kafa karıştırıcı, bunlar
+için ayrı bir alan olsun" isteğiyle, `shared/help_content.py` (tek,
+paylaşılan içerik kaynağı) + launcher sidebar'ına yeni **"Bilgi
+Merkezi"** sekmesi eklendi. Tüm sistem tarandı, 6 kavram için detaylı
+anlatım yazıldı: Sunucu Kimlik Doğrulama (Host Key), Live/Offline
+Acquisition (Yazma Engelleme — daha önce hiç açıklanmıyordu), Delil
+Zinciri (Chain of Custody), Hash/Bütünlük Doğrulaması, RAM "Full" Modu
+(Yönetici/Sürücü/Secure Boot), Tor/.onion/Operatör Anahtarı. İlgili
+ekranlardaki her "Bu ne demek?" linki, launcher içinden açıldığında
+Bilgi Merkezi'ndeki ilgili karta doğrudan kaydırıyor; `gui_v2.py`/
+`ram_gui.py` standalone çalıştırıldığında aynı içerik küçük bir
+dialogda gösteriliyor. Headless testlerle her linkin doğru karta
+kaydırdığı ekran görüntüsüyle doğrulandı.
+
+Aynı sırada `cryptography` paketi de (pip-audit'te bulunan
+PYSEC-2026-3552 için) 49.0.0 → 50.0.1'e yükseltildi — etkilenen kod
+yolu (PKCS#7) projede zaten kullanılmıyordu, yine de bedelsiz olduğu
+için yapıldı.
+
+## 16. Rol seçim ekranı + hedef taraf sihirbazı eklendi
+Kullanıcı, uygulamanın operatör (istemci) ve hedef (sunucu) tarafında
+AYNI çalışmaması gerektiğini belirtti — hedef tarafta teknik bilgisi
+olmayan biri olabileceği için. Uygulama artık her açılışta (kayıtlı
+tercih yok, her seferinde farklı biri kullanıyor olabilir) önce **"Bu
+bilgisayardaki kişi kimsiniz? Operatörüm / Bu Cihaz İnceleniyor"**
+soruyor. "Operatörüm" mevcut launcher'ı değiştirmeden açıyor. "Bu Cihaz
+İnceleniyor" seçilirse sidebar/RAM-imajı/SSH-araçları gibi operatör
+araç seti HİÇ GÖSTERİLMEZ, bunun yerine 3 numaralı adımdan oluşan ayrı
+bir sihirbaz açılıyor: (1) operatör anahtarını yapıştır, (2)
+"Bağlantıyı Başlat" (embedded Tor'u arka planda ayağa kaldırıp hidden
+service kurar, UI donmaz), (3) üretilen `.onion` adresini kopyala/
+operatöre ilet + "Bağlantıyı Kapat". Pencere kapanırken/"Geri" ile
+çıkılırken açık kalmış bir Tor süreci varsa otomatik kapatılıyor —
+orphan process kalmıyor, gerçek Tor süreciyle doğrulandı.
+
+**Bu arada kritik bir bug bulundu**: sihirbazı gerçek gömülü Tor'a
+karşı test ederken, `engines/portable_kit/tor_manager.py`'deki
+`ADD_ONION` çağrısı hiç çalışmıyormuş (yanlış parametre kombinasyonu —
+detaylar [hatalar_ve_sonuclar.md](hatalar_ve_sonuclar.md)'da).
+Düzeltildi, gerçek bir operatör anahtarıyla tekrar denendi — geçerli
+bir `.onion` adresi üretildi. Yani **hedef tarafın gerçek Tor ağı
+üzerinden hidden service kurması artık doğrulandı** — madde 3'teki
+"gerçek ağ üzerinden canlı test" bunun yarısını tamamlıyor. Eksik
+kalan: operatörün o gerçek `.onion` adresine bağlanıp SSH kurabildiği
+(döngünün ikinci yarısı) henüz denenmedi, muhtemelen iki ayrı makine/ağ
+gerektiriyor.
+
+## 17. Host key TOFU (hatırla + karşılaştır) eklendi
+"Doğrulamayı atla" modunun hiç hafızası olmadığı (aynı cihaza tekrar
+bağlanılsa bile her seferinde "ilk kez görüyormuş" gibi davranması)
+kullanıcıyla birlikte fark edildi. `ssh_connector.py`'ye Chameleon'a
+özel bir known_hosts dosyası (`engines/ssh_engine/keys/
+chameleon_known_hosts`, kullanıcının kendi SSH ayarlarına dokunmuyor)
+ve yeni `_TofuPolicy` eklendi: ilk bağlantıda sunucunun kimliği
+otomatik kaydediliyor, sonraki bağlantılarda o kayıtla karşılaştırılıyor.
+**Kritik**: sunucunun kimliği SONRADAN değişirse, "atla" seçili olsa
+bile bağlantı REDDEDİLİYOR ve kullanıcıya özel bir "DİKKAT" mesajı
+gösteriliyor — bu paramiko'nun kendi davranışı, hiçbir policy bunu
+atlayamıyor. Bir kez TOFU ile öğrenilen bir sunucu artık "Sıkı doğrula"
+modunda da çalışıyor. Gerçek bir SSH sunucusuna (WSL) karşı dört
+senaryo da (öğrenme, tanıma, sıkı modda geçerlilik, gerçekten değişen
+bir anahtarın reddedilmesi) ayrı ayrı test edildi.
+
+İlk önerilen ikinci bir iyileştirme (hedef tarafın kendi makinesine de
+bir delil zinciri logu yazması) kullanıcı tarafından haklı olarak
+reddedildi: hedef cihaza herhangi bir dosya yazmak, delil bütünlüğünü
+zedeler (tam olarak "Live vs Offline" ayrımının önlemeye çalıştığı şey)
+— bu yüzden uygulanmadı.
+
+## 18. Bilgi Merkezi'ne gidince form/bağlantı kaybolma hatası düzeltildi
+Kullanıcı, bir arac ekranındaki "Bu ne demek?" linkine basıp Bilgi
+Merkezi'ne gidince, doldurduğu form alanlarının sıfırlandığını ve
+"kaldığı yerden devam edemediğini" bildirdi — gerçek bir bug'dı
+(detaylar [hatalar_ve_sonuclar.md](hatalar_ve_sonuclar.md)'da). Çözüm:
+arac ekranından Bilgi Merkezi'ne geçilirken o ekran SİLİNMEDEN
+(`_show_help_from_tool`) saklanıyor, Bilgi Merkezi'nde beliren "←
+Kaldığınız yere dön" butonu (`_return_from_help`) aynı widget'ı tüm
+girilmiş değerleriyle (ve varsa açık SSH bağlantısıyla) geri getiriyor.
+Hem SSH hem RAM motoru ekranında, hem de "Geri" kullanılmadan başka bir
+sayfaya geçilmesi durumunda (eski sayfa sessizce temizleniyor mu) test
+edildi. `dist/Chameleon.exe` bu düzeltmeyle yeniden derlendi.
+
+## 19. Bilgi Merkezi kaydırma düzeltmesi + 4 uzman ajanla kapsamlı inceleme
+Bir sonraki geri bildirimde, bazı "Bu ne demek?" linklerinin (özellikle
+"Delil zinciri nedir?") sanki sayfanın başına atıyormuş gibi görünmesi
+bildirildi — kök neden `ensureWidgetVisible()`'ın kart zaten kısmen
+görünürdeyse neredeyse hiç kaydırmaması, kartı viewport'un en altına
+sıkıştırması. Kaydırma çubuğu artık doğrudan hedef kartın konumuna
+ayarlanıyor, 6 konunun tümü ölçülerek doğrulandı.
+
+Ardından kullanıcı "bu güvenilir mi, projeyi sızdırır mı" diye sordu —
+kullanılan ajanların (Incident Responder, Security Architect,
+Penetration Tester, Code Reviewer) bu oturumun/CLI'nin İÇİNDE, yerel
+dosya okuma araçlarıyla çalışan özelleşmiş roller olduğu, hiçbir kodun
+üçüncü tarafa gönderilmediği açıklandı. Bu 4 ajanla kod/tasarım
+incelemesi yapıldı, bulunan TÜM gerçek sorunlar düzeltildi (detaylar
+[roadmap.md](roadmap.md) ve [hatalar_ve_sonuclar.md](hatalar_ve_sonuclar.md)'da):
+- **[KRİTİK]** Rapordaki "doğrulandı" alanı hiç doldurulmuyordu — düzeltildi.
+- **[KRİTİK]** Delil zinciri log'u hedef cihazdaki dosya adlarıyla
+  manipüle edilebiliyordu (delil kaybı + sahte kayıt enjeksiyonu) — düzeltildi.
+- Hedef sihirbazında yapıştırılan anahtar hiç doğrulanmıyordu — her iki
+  tarafta da görünen bir "parmak izi" koduyla düzeltildi.
+- Tor kontrol protokolü komutlarına ham metin enjekte edilebiliyordu —
+  format doğrulaması eklendi.
+- `chameleon_known_hosts` symlink koruması + eşzamanlı TOFU yazma
+  yarışı için kilit eklendi.
+- `last_error_type` artık kırılgan mesaj eşleştirmesi yerine exception türüne bakıyor.
+- Delil zincirine artık sunucunun gerçek host key parmak izi de kaydediliyor.
+- Live Acquisition'ın tutarlılık sınırlaması artık hem Bilgi Merkezi'nde hem raporda belirtiliyor.
+- Bağlantı koparıp devam edilen (resume) işlemlerde write-block durumu artık gerçekten kontrol ediliyor.
+- Hedef sihirbazındaki 3 kararlılık hatası (geç gelen sinyal çökmesi,
+  çift tıklama, aktif işi olan bir sayfanın sessizce silinmesi) düzeltildi.
+- Reddedilen öneri: hedef cihaza delil zinciri logu yazmak — kullanıcı
+  haklı olarak reddetti (delil bütünlüğünü zedeler).
+- Ertelenen (mimari ölçekte, roadmap'e not edildi): log dosyasının kendi
+  bütünlük koruması, operatör anahtarı yenileme, kalıcı onion kimliği.
+
+Tüm düzeltmeler mock/gerçek SSH ve gerçek Tor ile ayrı ayrı test edildi,
+`dist/Chameleon.exe` yeniden derlendi.
+
+## 20. Erişilebilirlik denetimi + düzeltmeleri
+Kullanıcı, `shared/ui_kit/` ve ekranların erişilebilirlik/tasarım
+tutarlılığı açısından denetlenmesini istedi (önce "web-design-guidelines"
+skill'i ve `src/components/` istendi ama bu proje bir PySide6 masaüstü
+uygulaması, ikisi de bu projeye ait değildi — netleştirme sonrası elle/
+kod-okuyarak denetim yapıldı). WCAG kontrast oranları matematiksel olarak
+hesaplandı: kart başlıkları (koyu temada 3.35–3.66:1, gereken 4.5:1),
+girdi alanı kenarlıkları (1.2:1, gereken 3:1), açık temada uyarı metni
+(2.97:1) hepsi standardın altında çıktı. Daha da önemlisi, `RadioButton`
+klavye odağını HİÇ çizmiyordu — Tab ile gezinirken hangi seçenekte
+olduğunuz görünmüyordu (uygulama genelinde Bağlantı Yöntemi, Sunucu
+Kimlik Doğrulama, Live/Offline vb. hepsi bunu kullanıyor). Kullanıcı
+"evet başla" deyince: yeni bir `ACCENT_TEXT` rengi + parlatılmış
+`BORDER` + koyulaştırılmış açık-tema `WARNING` eklendi, `RadioButton`'a
+gerçek bir odak çerçevesi çizildi, `Input`'un odak kenarlığı
+güçlendirildi, `MonoLabel`'a klavye ile seçilebilirlik eklendi,
+butonlara `:focus` durumu eklendi. Headless ekran görüntüleriyle hem
+koyu hem açık temada doğrulandı, tüm önceki regresyon testleri tekrar
+geçti, `dist/Chameleon.exe` yeniden derlendi. Detaylar
+[roadmap.md](roadmap.md)'de.
+
+## 21. Rol seçim ekranındaki tekrarlı buton metni düzeltildi
+Kullanıcı, açılıştaki rol seçim ekranında ("Operatörüm" / "Bu Cihaz
+İnceleniyor") her iki kartın da aynı, generic "Bunu Seç" yazısını
+taşımasını hoş bulmadığını bildirdi. `chameleon_gui.py`'deki iki
+`PrimaryButton` artık kendi kartına özgü, ayrım yapan bir metin
+taşıyor: Operatör kartı "Operatör Olarak Devam Et", hedef cihaz kartı
+"Bu Cihazla Devam Et". Fonksiyonel bir değişiklik yok, sadece metin.
+
 ## Şu an bekleyen
-- Gerçek bir SSH hedefine bağlanıp "Gözat" özelliğinin gerçek cihazda
-  denenmesi (mock testler geçti, gerçek cihaz testi henüz yapılmadı).
-- `dist/Chameleon.exe`'nin bu son değişikliklerle (güvenlik düzeltmeleri
-  + Gözat özelliği) yeniden derlenmesi — henüz yapılmadı.
-- Gerçek Tor ağı üzerinden canlı test (sizinle birlikte).
+- Operatörün, hedef tarafın ürettiği gerçek bir `.onion` adresine
+  `tor_client.py` ile bağlanıp SSH kurabildiğinin doğrulanması (Tor
+  canlı testinin "iki cihaz arası" ikinci yarısı) — sizinle birlikte
+  yapılacak.
 - `gui_v2.py`/`ram_gui.py`'nin kendi araç ekranları hâlâ TR-only —
   dil desteği şimdilik sadece launcher'da.
+- Ertelenen mimari iyileştirmeler (bkz. madde 19): delil zinciri log
+  bütünlüğü, operatör Tor anahtarı yenileme, kalıcı onion kimliği.

@@ -21,10 +21,10 @@ import subprocess
 import sys
 import time
 
-from PySide6.QtCore import QThread, Signal
+from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtWidgets import (
     QButtonGroup, QComboBox, QDialog, QFileDialog, QHBoxLayout, QLabel,
-    QMainWindow, QPlainTextEdit, QVBoxLayout, QWidget,
+    QMainWindow, QPlainTextEdit, QPushButton, QVBoxLayout, QWidget,
 )
 
 RAM_ENGINE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -35,6 +35,7 @@ _SHARED_DIR = os.path.join(RAM_ENGINE_DIR, "..", "..", "shared")
 if os.path.isdir(_SHARED_DIR):
     sys.path.insert(0, _SHARED_DIR)
 from ui_kit import theme_qt as ui, fonts, icons, widgets  # noqa: E402
+from help_content import get_topic  # noqa: E402
 
 try:
     from forensic_report import ForensicReport
@@ -259,10 +260,14 @@ class RamWorker(QThread):
 
 
 class RamEngineWidget(QWidget):
-    def __init__(self, on_back=None, initial_case_id="", initial_examiner="",
+    def __init__(self, on_back=None, on_show_help=None, initial_case_id="", initial_examiner="",
                  initial_custodian="", parent=None):
         super().__init__(parent)
         self.on_back = on_back
+        # bkz. gui_v2.py'deki ForensicWidget.on_show_help -- ayni desen:
+        # launcher icinden aciliyorsa Bilgi Merkezi sayfasina goturur,
+        # standalone calistirmada None kalir (dialog fallback kullanilir).
+        self.on_show_help = on_show_help
         self._pid_map = {}
         self.worker = None
         self._build_ui(initial_case_id, initial_examiner, initial_custodian)
@@ -337,6 +342,7 @@ class RamEngineWidget(QWidget):
         warn.setWordWrap(True)
         warn.setStyleSheet(f"color:{ui.ERROR}; font-family:'{ui.FONT_UI}'; font-size:{ui.SIZE_HELPER}px;")
         self.full_card.body.addWidget(warn)
+        self.full_card.body.addWidget(self._help_link("ram_full_mode_driver"))
         layout.addWidget(self.full_card)
         self.full_card.hide()
 
@@ -371,6 +377,7 @@ class RamEngineWidget(QWidget):
 
         # === Gunluk ===
         log_card = widgets.Card("Günlük")
+        log_card.body.addWidget(self._help_link("chain_of_custody", "Delil zinciri nedir?"))
         self.txt_log = QPlainTextEdit()
         self.txt_log.setReadOnly(True)
         self.txt_log.setMinimumHeight(200)
@@ -390,6 +397,53 @@ class RamEngineWidget(QWidget):
         lbl = QLabel(text)
         lbl.setStyleSheet(f"color:{ui.TEXT_SECONDARY}; font-family:'{ui.FONT_UI}'; font-size:{ui.SIZE_HELPER}px; font-style: italic;")
         return lbl
+
+    def _help_link(self, topic_key, label="Bu ne demek? (Bilgi Merkezi'nde oku)"):
+        """Bilgi Merkezi'ndeki bir konuya goturen, mavi metin gorunumlu
+        kucuk bir buton -- bkz. gui_v2.py'deki ForensicWidget._help_link
+        (ayni desen, iki dosya birbirinden bagimsiz calisabildigi icin
+        kod tekrarlanir)."""
+        btn = QPushButton(label)
+        btn.setFlat(True)
+        btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn.setStyleSheet(
+            f"QPushButton {{ color:{ui.ACCENT_TEXT}; background:transparent; border:none; "
+            f"text-align:left; font-family:'{ui.FONT_UI}'; font-size:{ui.SIZE_HELPER}px; "
+            f"padding:2px 0; }} QPushButton:hover {{ color:{ui.ACCENT_HOVER}; }}"
+        )
+        btn.clicked.connect(lambda: self._show_help_topic(topic_key))
+        return btn
+
+    def _show_help_topic(self, topic_key):
+        """bkz. gui_v2.py'deki ForensicWidget._show_help_topic -- ayni
+        mantik: launcher icinden aciliyorsa Bilgi Merkezi sayfasina
+        goturur, standalone calistirmada kucuk bir dialogda gosterir."""
+        if self.on_show_help is not None:
+            self.on_show_help(topic_key)
+            return
+
+        from PySide6.QtWidgets import QScrollArea
+
+        topic = get_topic(topic_key)
+        if topic is None:
+            return
+        dialog = QDialog(self)
+        dialog.setWindowTitle(topic["title"])
+        dialog.resize(480, 420)
+        layout = QVBoxLayout(dialog)
+
+        text = QLabel(topic["body"])
+        text.setWordWrap(True)
+        text.setStyleSheet(f"color:{ui.TEXT_MAIN}; font-family:'{ui.FONT_UI}'; font-size:{ui.SIZE_BODY}px;")
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(text)
+        layout.addWidget(scroll)
+
+        close_btn = widgets.SecondaryButton("Kapat")
+        close_btn.clicked.connect(dialog.accept)
+        layout.addWidget(close_btn)
+        dialog.exec()
 
     def _labeled_input(self, body_layout, label_text, initial_value):
         row = QHBoxLayout()

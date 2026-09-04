@@ -115,6 +115,14 @@ class ForensicReport:
         self.verified = True
         self.verified_at_utc = _now_iso()
         self.verification_hash_match = matched
+        # Dogrulama, alma islemi bitince (end_time_utc) SONRA yapilir --
+        # to_dict()'teki coc.read_events() penceresi end_time_utc'de
+        # kapandigi icin, bunu genisletmezsek HASH_VERIFIED olayi diskteki
+        # log dosyasinda olsa bile bu raporun kendi "chain_of_custody.events"
+        # listesine hic girmezdi (rapor "verified: true" derken, ayni
+        # rapordaki olay listesi bunu dogrulayan hicbir kayit gostermezdi).
+        if self.end_time_utc and self.verified_at_utc > self.end_time_utc:
+            self.end_time_utc = self.verified_at_utc
 
     def to_dict(self):
         coc_log_path = coc.get_log_file_path()
@@ -283,7 +291,7 @@ class ForensicReport:
         except (OSError, json.JSONDecodeError):
             history = []
 
-        history.append({
+        entry = {
             "case_id": self.case_id,
             "examiner": self.examiner,
             "custodian": self.custodian,
@@ -298,7 +306,17 @@ class ForensicReport:
             "end_time_utc": self.end_time_utc,
             "report_path": report_path,
             "html_path": html_path,
-        })
+        }
+        # save() dogrulama sonrasi TEKRAR cagrilabilir (bkz. set_verification
+        # kullanan gui_v2.py) -- ayni report_path icin ikinci bir satir
+        # EKLEMEK yerine mevcut kaydi guncelliyoruz, aksi halde Vaka
+        # Gecmisi'nde ayni vaka iki kez gorunurdu.
+        for i, h in enumerate(history):
+            if h.get("report_path") == report_path:
+                history[i] = entry
+                break
+        else:
+            history.append(entry)
 
         try:
             with open(HISTORY_FILE, "w", encoding="utf-8") as f:

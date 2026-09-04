@@ -43,12 +43,25 @@ DARK = {
     "BG_LAYER2": "#1F2937",    # Ikinci katman (input, hover)
     "ACCENT": "#2563EB",
     "ACCENT_HOVER": "#3B82F6",
+    # Kucuk metin (kart basligi, "Bu ne demek?" linki, parmak izi kodu vb.)
+    # icin ACCENT'ten AYRI, daha acik bir mavi -- duz ACCENT (#2563EB) koyu
+    # arka planlarda kucuk metin olarak WCAG AA'nin (4.5:1) altinda kaliyordu
+    # (olcum: BG_SURFACE'de 3.35:1). Erisilebilirlik denetiminde bulundu.
+    # ACCENT'in kendisi degismedi -- dolgu/buton rengi olarak (uzerinde
+    # beyaz metinle) zaten yeterli kontrasta sahip, sadece KUCUK METIN
+    # olarak kullanildigi yerler bu tokene gecti.
+    "ACCENT_TEXT": "#3B82F6",
     "SUCCESS": "#22C55E",
     "WARNING": "#F59E0B",
     "ERROR": "#EF4444",
     "TEXT_MAIN": "#E5E7EB",
     "TEXT_SECONDARY": "#9CA3AF",
-    "BORDER": "#30363D",
+    # Eskiden #30363D (BG_LAYER2'ye karsi 1.2:1 -- WCAG'in UI bileseni
+    # sinirlari icin istedigi 3:1'in cok altinda; bir input alaninin
+    # odaksizken nerede basladigi/bittigi dusuk gorusle ayirt edilemiyordu).
+    # Erisilebilirlik denetiminde bulundu, kenarlik/oncisiz radyo halkasi/
+    # kart sinirinin TAMAMI bu tek tokenden geldigi icin BURADAN duzeltildi.
+    "BORDER": "#6B7280",
 }
 
 LIGHT = {
@@ -57,12 +70,16 @@ LIGHT = {
     "BG_LAYER2": "#EEF1F5",
     "ACCENT": "#2563EB",
     "ACCENT_HOVER": "#1D4ED8",  # acik zeminde hover koyulastirir
+    "ACCENT_TEXT": "#2563EB",  # acik temada duz ACCENT zaten 4.5:1'i geciyor
     "SUCCESS": "#16A34A",
-    "WARNING": "#D97706",
+    # Eskiden #D97706 -- BG_DARKEST'e (#F5F7FA) karsi 2.97:1, WCAG AA'nin
+    # (4.5:1) altinda. Erisilebilirlik denetiminde bulundu.
+    "WARNING": "#B45309",
     "ERROR": "#DC2626",
     "TEXT_MAIN": "#111827",
     "TEXT_SECONDARY": "#6B7280",
-    "BORDER": "#D1D5DB",
+    # Eskiden #D1D5DB (BG_LAYER2'ye karsi 1.3:1) -- bkz. DARK'taki AYNI duzeltme.
+    "BORDER": "#828A98",
 }
 
 _current_mode = "dark"

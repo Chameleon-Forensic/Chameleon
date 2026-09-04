@@ -12,6 +12,7 @@ yolu shared/tor_binary.py uzerinden bulunur -- portable_kit/tor_manager.py
 ile AYNI binary, iki kopya tutulmaz.
 """
 import os
+import re
 import sys
 import tempfile
 
@@ -23,6 +24,11 @@ _SHARED_DIR = os.path.join(_LOCAL_COLLECTOR_DIR, "..", "..", "..", "shared")
 if os.path.isdir(_SHARED_DIR):
     sys.path.insert(0, _SHARED_DIR)
 from tor_binary import default_tor_binary_path  # noqa: E402
+from onion_auth import is_valid_key_b32  # noqa: E402
+
+# v3 .onion adresi: 56 karakter base32 (dolgusuz, kucuk harf) -- Ed25519
+# public key + checksum + versiyon baytinin kodlanmis hali.
+_ONION_ADDRESS_RE = re.compile(r"^[a-z2-7]{56}$")
 
 
 class TorClientHandle:
@@ -62,6 +68,20 @@ def start_client(onion_address, client_auth_private_b32, tor_binary_path=None,
     Donus: basarili olursa TorClientHandle (socks_port, close() icin),
     olmazsa None.
     """
+    # Bu ikisi asagida Tor'un ham control-protokol komutuna DOGRUDAN
+    # yerlestiriliyor (ONION_CLIENT_AUTH_ADD) -- Tor'a gitmeden ONCE
+    # beklenen bicimde olduklarini dogruluyoruz (bkz. onion_auth.
+    # is_valid_key_b32 dokstring'i: CR/LF gibi kontrol karakterleri
+    # ayni mesaja ikinci bir komut enjekte edebilirdi).
+    onion_address = (onion_address or "").strip().lower()
+    if not _ONION_ADDRESS_RE.match(onion_address):
+        print(f"[-] Gecersiz .onion adresi formati: {onion_address!r}")
+        return None
+    if not is_valid_key_b32(client_auth_private_b32):
+        print("[-] Gecersiz operator anahtari formati.")
+        return None
+    client_auth_private_b32 = client_auth_private_b32.strip()
+
     tor_binary_path = tor_binary_path or default_tor_binary_path()
     if not tor_binary_path:
         print(

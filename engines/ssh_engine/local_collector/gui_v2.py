@@ -30,7 +30,7 @@ import threading
 from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtWidgets import (
     QButtonGroup, QComboBox, QDialog, QFileDialog, QHBoxLayout, QLabel,
-    QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QTextEdit,
+    QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QPushButton, QTextEdit,
     QVBoxLayout, QWidget,
 )
 
@@ -41,6 +41,7 @@ _SHARED_DIR = os.path.join(PROJECT_ROOT, "..", "..", "shared")
 if os.path.isdir(_SHARED_DIR):
     sys.path.insert(0, _SHARED_DIR)
 from ui_kit import theme_qt as ui, fonts, icons, widgets  # noqa: E402
+from help_content import get_topic  # noqa: E402
 
 try:
     from forensic_report import ForensicReport
@@ -73,9 +74,10 @@ except ImportError as exc:
     IMPORT_ERROR = str(exc)
 
 try:
-    from onion_auth import generate_keypair
+    from onion_auth import generate_keypair, key_fingerprint
 except ImportError:
     generate_keypair = None
+    key_fingerprint = None
 
 
 LOG_COLORS = {
@@ -153,7 +155,8 @@ class ConnectWorker(QThread):
     connected = Signal(object, bool)  # (SSHConnector, tor_uzerinden_mi)
 
     def __init__(self, host, port, user, password, key_path, conn_method,
-                 operator_private_key, existing_tor_handle, parent=None):
+                 operator_private_key, existing_tor_handle, strict_host_key=True,
+                 parent=None):
         super().__init__(parent)
         self.host = host
         self.port = port
@@ -162,6 +165,10 @@ class ConnectWorker(QThread):
         self.key_path = key_path
         self.conn_method = conn_method
         self.operator_private_key = operator_private_key
+        # False ise sunucunun SSH kimligi (host key) daha once hic
+        # gorulmemis olsa bile baglantiya izin verilir -- sahsa ait
+        # cihazlarda parmak izini teyit edecek bir yetkili olmayacagi icin.
+        self.strict_host_key = strict_host_key
         self.existing_tor_handle = existing_tor_handle
         self.tor_client_handle = None
 
@@ -189,19 +196,58 @@ class ConnectWorker(QThread):
         self.log.emit(f"Bağlanılıyor: {self.user}@{self.host}:{self.port} ...", "info")
         ssh = SSHConnector(
             host=self.host, port=self.port, username=self.user,
-            password=self.password, key_path=self.key_path, strict=True,
+            password=self.password, key_path=self.key_path, strict=self.strict_host_key,
             socks_proxy_port=socks_proxy_port,
         )
 
         if ssh.connect():
+            if not self.strict_host_key:
+                aciklama = {
+                    "learned": f"Sunucunun kimligi ilk kez ogrenilip kaydedildi: {self.user}@{self.host}:{self.port}",
+                    "known": f"Sunucu, daha once ogrenilmis kimligiyle eslesti: {self.user}@{self.host}:{self.port}",
+                }.get(ssh.host_key_status, f"Sunucu kimlik dogrulamasi atlanarak baglanildi: {self.user}@{self.host}:{self.port}")
+                # Sunucunun GERCEK host key parmak izi de kaydediliyor --
+                # onceden sadece "ogrenildi/biliniyor" yaziyordu, ileride
+                # bagimsiz bir kaynaktan (orn. hedef IT yetkilisi) alinacak
+                # bir parmak iziyle karsilastirilabilecek somut bir deger
+                # yoktu (guvenlik incelemesinde bulunan bir bosluk).
+                coc.log_event(coc.EVENT_HOST_KEY_VERIFICATION_SKIPPED, aciklama, ssh.host_key_fingerprint)
             self.connected.emit(ssh, bool(socks_proxy_port))
         else:
-            self.error.emit(
-                "SSH bağlantısı kurulamadı.\nBilgileri kontrol edin veya sunucunun açık olduğundan emin olun."
-            )
+            self.error.emit(self._connect_error_message(ssh))
             if self.tor_client_handle is not None:
                 self.tor_client_handle.close()
                 self.tor_client_handle = None
+
+    @staticmethod
+    def _connect_error_message(ssh):
+        """ssh.last_error_type'a gore kullaniciya NE YAPMASI gerektigini
+        soyleyen, nedene ozgu bir mesaj uretir -- genel "kontrol edin"
+        yerine (bkz. docs/oturum_ozeti.md, kullanicinin bu konudaki geri
+        bildirimi)."""
+        detay = str(ssh.last_error) if ssh.last_error else ""
+        if ssh.last_error_type == "host_key":
+            return (
+                "Bu sunucuya daha önce hiç bağlanılmamış, kimliği doğrulanamadı.\n"
+                "Yukarıdaki \"Sunucu Kimlik Doğrulama\" seçeneğinden \"Doğrulamayı atla\"yı "
+                "işaretleyip tekrar deneyin."
+            )
+        if ssh.last_error_type == "host_key_mismatch":
+            return (
+                "DİKKAT: Bu sunucunun kimliği, daha önce bu bilgisayardan bağlanılan kaydıyla "
+                "UYUŞMUYOR.\nBu, sunucunun gerçekten değiştiğini (örn. yeniden kurulum) ya da "
+                "aranıza birinin girdiğini gösterebilir -- \"Doğrulamayı atla\" seçili olsa "
+                "bile bu yüzden bağlantı reddedildi. Devam etmeden önce durumu doğrulayın."
+            )
+        if ssh.last_error_type == "auth":
+            return "Kullanıcı adı veya şifre/anahtar yanlış görünüyor. Bilgileri kontrol edip tekrar deneyin."
+        if ssh.last_error_type == "unreachable":
+            return (
+                "Sunucuya hiç ulaşılamadı.\nHedefte SSH servisinin çalıştığından, doğru "
+                "IP/port kullandığınızdan ve aranızda bir güvenlik duvarının bağlantıyı "
+                "engellemediğinden emin olun."
+            )
+        return f"SSH bağlantısı kurulamadı.{(' Detay: ' + detay) if detay else ''}"
 
 
 # ---------------------------------------------------------------------------
@@ -315,7 +361,12 @@ class AcquisitionWorker(QThread):
             if report:
                 report.set_write_blocking(
                     apply_wb,
-                    "Offline Acquisition" if apply_wb else "Live Acquisition -- disk aktif kullanimda, kilitlenmedi",
+                    "Offline Acquisition" if apply_wb else (
+                        "Live Acquisition -- disk aktif kullanimda, kilitlenmedi. "
+                        "Bloklar bir sureye yayilarak okundugu icin imaj, diskin "
+                        "TEK bir anina degil, alma suresince degisebilecek bir "
+                        "durumuna karsilik gelebilir."
+                    ),
                 )
 
             sonuc = acquire_disk_image(
@@ -430,7 +481,12 @@ class AcquisitionWorker(QThread):
             if report:
                 report.set_write_blocking(
                     apply_wb,
-                    "Offline Acquisition" if apply_wb else "Live Acquisition -- disk aktif kullanimda, kilitlenmedi",
+                    "Offline Acquisition" if apply_wb else (
+                        "Live Acquisition -- disk aktif kullanimda, kilitlenmedi. "
+                        "Bloklar bir sureye yayilarak okundugu icin imaj, diskin "
+                        "TEK bir anina degil, alma suresince degisebilecek bir "
+                        "durumuna karsilik gelebilir."
+                    ),
                 )
 
             def ilerleme(done, total):
@@ -587,10 +643,25 @@ class VerifyWorker(QThread):
     result_mismatch = Signal(str, str)
     result_error = Signal(str)
 
-    def __init__(self, path, expected, parent=None):
+    def __init__(self, path, expected, report=None, report_path=None, parent=None):
         super().__init__(parent)
         self.path = path
         self.expected = expected
+        # Verilirse (az onceki alma islemine ait otomatik dogrulama --
+        # bkz. _on_ask_verify), dogrulama sonucu bu rapora islenip yeniden
+        # kaydedilir -- oncesinde report.json/html HER ZAMAN "verified:
+        # false" yaziyordu, dogrulama basarili olsa bile hic guncellenmiyordu.
+        self.report = report
+        self.report_path = report_path
+
+    def _update_report(self, matched):
+        if self.report is None or self.report_path is None:
+            return
+        try:
+            self.report.set_verification(matched)
+            self.report.save(os.path.dirname(self.report_path))
+        except OSError as exc:
+            self.log.emit(f"[UYARI] Doğrulama sonucu rapora yazılamadı: {exc}", "warn")
 
     def run(self):
         try:
@@ -599,9 +670,11 @@ class VerifyWorker(QThread):
                 coc.EVENT_HASH_VERIFIED,
                 f"İmaj doğrulandı: {self.path} ({result_obj.byte_count} bayt)", result_obj.digest,
             )
+            self._update_report(True)
             self.result_ok.emit(result_obj.digest, result_obj.byte_count)
         except HashMismatchError as exc:
             coc.log_event(coc.EVENT_HASH_MISMATCH, f"Doğrulama başarısız: {self.path}", exc.actual)
+            self._update_report(False)
             self.result_mismatch.emit(exc.expected, exc.actual)
         except (HashError, FileNotFoundError, OSError) as exc:
             coc.log_event(coc.EVENT_EXAM_ERROR, f"Doğrulama hatası: {exc}")
@@ -715,7 +788,7 @@ class RemoteBrowseDialog(QDialog):
 # Ana widget
 # ---------------------------------------------------------------------------
 class ForensicWidget(QWidget):
-    def __init__(self, on_back=None, initial_case_id="", initial_examiner="",
+    def __init__(self, on_back=None, on_show_help=None, initial_case_id="", initial_examiner="",
                  initial_custodian="", initial_connection_method=None, parent=None):
         """
         initial_connection_method: launcher'dan hangi yontem sayfasi
@@ -731,6 +804,11 @@ class ForensicWidget(QWidget):
         """
         super().__init__(parent)
         self.on_back = on_back
+        # launcher icinden aciliyorsa (her zaman boyle) Bilgi Merkezi
+        # sayfasina goturen callback -- standalone `python gui_v2.py`
+        # calistirmasinda None kalir, bu durumda _show_help_topic() ayni
+        # icerigi kucuk bir dialogda gosterir (bkz. asagisi).
+        self.on_show_help = on_show_help
         self._initial_case_id = initial_case_id
         self._initial_examiner = initial_examiner
         self._initial_custodian = initial_custodian
@@ -741,6 +819,8 @@ class ForensicWidget(QWidget):
         self.tor_client_handle = None
         self._pid_map = {}
         self.connect_worker = None
+        self._last_report = None
+        self._last_report_path = None
         self.acq_worker = None
         self.verify_worker = None
         self._operator_private_key = None
@@ -864,6 +944,46 @@ class ForensicWidget(QWidget):
         row3.addWidget(browse_key_btn)
         conn.body.addLayout(row3)
 
+        # === Sunucu Kimlik Dogrulama (host key) ===
+        self.strict_host_key_value = True
+        hk_label = QLabel("Sunucu Kimlik Doğrulama:")
+        hk_label.setStyleSheet(f"color:{ui.TEXT_MAIN}; font-family:'{ui.FONT_UI}'; font-size:{ui.SIZE_HELPER}px; font-weight:600;")
+        conn.body.addWidget(hk_label)
+
+        hk_row = QHBoxLayout()
+        self.hostkey_group = QButtonGroup(self)
+        self.radio_hostkey_strict = widgets.RadioButton("Sıkı doğrula (önerilen)")
+        self.radio_hostkey_skip = widgets.RadioButton("Doğrulamayı atla")
+        self.radio_hostkey_strict.setChecked(True)
+        for r in (self.radio_hostkey_strict, self.radio_hostkey_skip):
+            self.hostkey_group.addButton(r)
+            hk_row.addWidget(r)
+            r.toggled.connect(self._on_hostkey_mode_change)
+        hk_row.addStretch()
+        conn.body.addLayout(hk_row)
+
+        hk_hint = QLabel(
+            "Sıkı doğrulama, sunucunun kimliğini kontrol ederek yanlış bir cihaza "
+            "bağlanmayı önler ve genelde önerilir. Daha önce hiç bağlanılmamış bir "
+            "sunucuda bu kontrol bağlantıyı engelleyebilir; böyle durumlarda ve "
+            "güvendiğiniz bir ağdaysanız (doğrudan kablo, kendi kurduğunuz hotspot vb.) "
+            "doğrulamayı atlayabilirsiniz. Tor (Acil Durum) modunda \"güvenilir ağ\" "
+            "kavramı geçerli değildir -- oradaki asıl güvenlik operatör anahtarıdır "
+            "(bkz. Bilgi Merkezi), bu yüzden Tor'da atlamayı sadece anahtarı doğru "
+            "kişiden aldığınızdan eminseniz seçin."
+        )
+        hk_hint.setWordWrap(True)
+        hk_hint.setStyleSheet(f"color:{ui.TEXT_SECONDARY}; font-family:'{ui.FONT_UI}'; font-size:{ui.SIZE_HELPER}px;")
+        conn.body.addWidget(hk_hint)
+
+        conn.body.addWidget(self._help_link("host_key_verification"))
+
+        self.hk_warn = QLabel("Bu tercih delil zincirine ayrıca kaydedilir.")
+        self.hk_warn.setWordWrap(True)
+        self.hk_warn.setStyleSheet(f"color:{ui.TEXT_SECONDARY}; font-family:'{ui.FONT_UI}'; font-size:{ui.SIZE_HELPER}px;")
+        self.hk_warn.setVisible(False)
+        conn.body.addWidget(self.hk_warn)
+
         connect_row = QHBoxLayout()
         self.btn_connect = widgets.PrimaryButton("Bağlan ve Diskleri Listele")
         self.btn_connect.clicked.connect(self._connect)
@@ -917,6 +1037,7 @@ class ForensicWidget(QWidget):
             self.mode_group.addButton(r)
             disk_row1.addWidget(r)
         self.disk_card.body.addLayout(disk_row1)
+        self.disk_card.body.addWidget(self._help_link("live_vs_offline_acquisition"))
 
         disk_row2 = QHBoxLayout()
         disk_row2.addWidget(QLabel("İmaj Çıktı Yolu:"))
@@ -996,6 +1117,11 @@ class ForensicWidget(QWidget):
 
         # === Log ===
         log_card = widgets.Card("İşlem Logu")
+        help_links_row = QHBoxLayout()
+        help_links_row.addWidget(self._help_link("chain_of_custody", "Delil zinciri nedir?"))
+        help_links_row.addWidget(self._help_link("hash_verification", "Hash doğrulaması nedir?"))
+        help_links_row.addStretch()
+        log_card.body.addLayout(help_links_row)
         self.txt_log = QTextEdit()
         self.txt_log.setReadOnly(True)
         self.txt_log.setMinimumHeight(220)
@@ -1044,7 +1170,7 @@ class ForensicWidget(QWidget):
         layout.setSpacing(6)
 
         heading = QLabel("Tor (Acil Durum) nedir?")
-        heading.setStyleSheet(f"color:{ui.ACCENT}; font-family:'{ui.FONT_UI}'; font-size:{ui.SIZE_HELPER}px; font-weight:600;")
+        heading.setStyleSheet(f"color:{ui.ACCENT_TEXT}; font-family:'{ui.FONT_UI}'; font-size:{ui.SIZE_HELPER}px; font-weight:600;")
         layout.addWidget(heading)
 
         what = QLabel(
@@ -1059,7 +1185,7 @@ class ForensicWidget(QWidget):
         layout.addWidget(what)
 
         steps_heading = QLabel("Kullanım adımları:")
-        steps_heading.setStyleSheet(f"color:{ui.ACCENT}; font-family:'{ui.FONT_UI}'; font-size:{ui.SIZE_HELPER}px; font-weight:600;")
+        steps_heading.setStyleSheet(f"color:{ui.ACCENT_TEXT}; font-family:'{ui.FONT_UI}'; font-size:{ui.SIZE_HELPER}px; font-weight:600;")
         layout.addWidget(steps_heading)
 
         steps = QLabel(
@@ -1098,6 +1224,22 @@ class ForensicWidget(QWidget):
         key_row.addWidget(copy_btn)
         layout.addLayout(key_row)
 
+        # Sahadaki kisinin hedef taraf sihirbazina yapistirdigi anahtarin
+        # DOGRU oldugunu telefonla teyit edebilmesi icin -- aynı kod, aynı
+        # hesaplamayla (onion_auth.key_fingerprint) orada da gosteriliyor.
+        self.lbl_operator_key_fingerprint = QLabel("")
+        self.lbl_operator_key_fingerprint.setStyleSheet(
+            f"color:{ui.ACCENT_TEXT}; font-family:'{ui.FONT_MONO}'; font-size:{ui.SIZE_HELPER}px; font-weight:600;"
+        )
+        layout.addWidget(self.lbl_operator_key_fingerprint)
+        hint = QLabel(
+            "Sahadaki kişi anahtarı yapıştırdıktan sonra kendi ekranında da bu kod "
+            "belirir -- başlatmadan önce telefonla karşılaştırın."
+        )
+        hint.setWordWrap(True)
+        hint.setStyleSheet(f"color:{ui.TEXT_SECONDARY}; font-family:'{ui.FONT_UI}'; font-size:{ui.SIZE_HELPER}px;")
+        layout.addWidget(hint)
+
         return panel
 
     # -- Baglanti yontemi degisimi ------------------------------------------
@@ -1120,6 +1262,8 @@ class ForensicWidget(QWidget):
             if self._operator_private_key is None:
                 self._operator_private_key, self._operator_public_key = self._load_or_create_operator_key()
             self.entry_operator_pubkey.setText(self._operator_public_key or "")
+            if key_fingerprint is not None and self._operator_public_key:
+                self.lbl_operator_key_fingerprint.setText(f"Kod: {key_fingerprint(self._operator_public_key)}")
 
     def _load_or_create_operator_key(self):
         """AYNEN tasindi (gui_v2.py) -- keys/operator_tor_key.json'dan yukler/uretir."""
@@ -1145,6 +1289,58 @@ class ForensicWidget(QWidget):
         from PySide6.QtWidgets import QApplication
         QApplication.clipboard().setText(self.entry_operator_pubkey.text())
         self._log("[+] Operatör açık anahtarı panoya kopyalandı.", "info")
+
+    def _on_hostkey_mode_change(self, *_args):
+        self.strict_host_key_value = not self.radio_hostkey_skip.isChecked()
+        self.hk_warn.setVisible(not self.strict_host_key_value)
+
+    def _help_link(self, topic_key, label="Bu ne demek? (Bilgi Merkezi'nde oku)"):
+        """Bilgi Merkezi'ndeki bir konuya goturen, mavi metin gorunumlu
+        kucuk bir buton."""
+        btn = QPushButton(label)
+        btn.setFlat(True)
+        btn.setCursor(Qt.PointingHandCursor)
+        btn.setStyleSheet(
+            f"QPushButton {{ color:{ui.ACCENT_TEXT}; background:transparent; border:none; "
+            f"text-align:left; font-family:'{ui.FONT_UI}'; font-size:{ui.SIZE_HELPER}px; "
+            f"padding:2px 0; }} QPushButton:hover {{ color:{ui.ACCENT_HOVER}; }}"
+        )
+        btn.clicked.connect(lambda: self._show_help_topic(topic_key))
+        return btn
+
+    def _show_help_topic(self, topic_key):
+        """Bilgi Merkezi'ndeki ilgili konuya goturur. Launcher icinden
+        aciliyorsa (normal kullanim) on_show_help callback'i ile SIDEBAR
+        SAYFASINA dogrudan gecilir. Standalone `python gui_v2.py`
+        calistirmasinda (Bilgi Merkezi sayfasi yok) ayni icerik kucuk bir
+        dialogda gosterilir -- CLAUDE.md'nin 'her modul tek basina
+        calisabilmeli' kurali icin."""
+        if self.on_show_help is not None:
+            self.on_show_help(topic_key)
+            return
+
+        from PySide6.QtWidgets import QScrollArea
+
+        topic = get_topic(topic_key)
+        if topic is None:
+            return
+        dialog = QDialog(self)
+        dialog.setWindowTitle(topic["title"])
+        dialog.resize(480, 420)
+        layout = QVBoxLayout(dialog)
+
+        text = QLabel(topic["body"])
+        text.setWordWrap(True)
+        text.setStyleSheet(f"color:{ui.TEXT_MAIN}; font-family:'{ui.FONT_UI}'; font-size:{ui.SIZE_BODY}px;")
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(text)
+        layout.addWidget(scroll)
+
+        close_btn = widgets.SecondaryButton("Kapat")
+        close_btn.clicked.connect(dialog.accept)
+        layout.addWidget(close_btn)
+        dialog.exec()
 
     # -- Kucuk UI durum degisimleri ------------------------------------------
     def _on_target_os_change(self, *_args):
@@ -1308,6 +1504,7 @@ class ForensicWidget(QWidget):
         self.connect_worker = ConnectWorker(
             host, port, user, password, key_path, self.conn_method_value,
             self._operator_private_key, self.tor_client_handle,
+            strict_host_key=self.strict_host_key_value,
         )
         self.connect_worker.log.connect(self._log)
         self.connect_worker.error.connect(self._on_connect_error)
@@ -1469,16 +1666,22 @@ class ForensicWidget(QWidget):
             "İmaj alma tamamlandı.\nUzak diskin SHA-256 hash'ini biliyor musunuz?\n(Biliyorsanız doğrulama yapılacak)",
         )
         if ans:
-            self._verify_image_with_path(image_path)
+            # Bu, az once tamamlanan alma islemine ait dogrulama -- sonucu
+            # (basarili/basarisiz) _last_report'a islemek icin rapor
+            # nesnesini de birlikte gonderiyoruz (bkz. VerifyWorker).
+            self._verify_image_with_path(image_path, report=self._last_report, report_path=self._last_report_path)
 
     # -- Imaj Dogrulama -----------------------------------------------------
     def _verify_image(self):
         path, _ = QFileDialog.getOpenFileName(self, "İmaj Dosyası Seç", "", "Raw Image (*.raw);;Tüm Dosyalar (*.*)")
         if not path:
             return
+        # Elle secilen keyfi bir dosya -- az onceki alma islemine ait
+        # raporla ILISKILENDIRILMIYOR (yanlis rapora "dogrulandi" yazmamak
+        # icin; sadece _on_ask_verify'daki otomatik akis rapor gunceller).
         self._verify_image_with_path(path)
 
-    def _verify_image_with_path(self, path):
+    def _verify_image_with_path(self, path, report=None, report_path=None):
         dialog = QDialog(self)
         dialog.setWindowTitle("Hash Doğrulama")
         dialog.setStyleSheet(f"background-color:{ui.BG_SURFACE};")
@@ -1511,7 +1714,7 @@ class ForensicWidget(QWidget):
             return
 
         self._log(f"\n--- İmaj Doğrulama: {path} ---", "info")
-        self.verify_worker = VerifyWorker(path, expected)
+        self.verify_worker = VerifyWorker(path, expected, report=report, report_path=report_path)
         self.verify_worker.result_ok.connect(self._on_verify_ok)
         self.verify_worker.result_mismatch.connect(self._on_verify_mismatch)
         self.verify_worker.result_error.connect(self._on_verify_error)
@@ -1537,6 +1740,12 @@ class ForensicWidget(QWidget):
     def _show_report_summary(self, report, report_path):
         if report is None or report_path is None:
             return
+        # "Imaj Dogrula" sorusu bu ozet penceresinden SONRA soruluyor
+        # (bkz. _on_ask_verify) -- dogrulama sonucunun rapora islenebilmesi
+        # icin (bkz. VerifyWorker) az once kaydedilen BU rapor nesnesi ve
+        # yolu burada saklanmali.
+        self._last_report = report
+        self._last_report_path = report_path
         html_path = os.path.splitext(report_path)[0] + ".html"
 
         dialog = QDialog(self)

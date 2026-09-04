@@ -13,7 +13,7 @@ import os
 import sys
 from datetime import datetime
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QColor, QIcon, QPixmap
 from PySide6.QtWidgets import (
     QApplication, QButtonGroup, QFrame, QHBoxLayout, QLabel, QMainWindow,
@@ -32,9 +32,12 @@ sys.path.insert(0, os.path.join(SHARED_DIR, "i18n"))
 from strings import t  # noqa: E402
 import version  # noqa: E402
 from ui_kit import theme_qt as ui, fonts, icons, widgets  # noqa: E402
+from help_content import HELP_TOPICS, get_topic  # noqa: E402
+from onion_auth import key_fingerprint  # noqa: E402
 
 SSH_ENGINE_DIR = os.path.join(PROJECT_ROOT, "engines", "ssh_engine", "local_collector")
 RAM_ENGINE_DIR = os.path.join(PROJECT_ROOT, "engines", "ram_engine")
+PORTABLE_KIT_DIR = os.path.join(PROJECT_ROOT, "engines", "portable_kit")
 ICON_PNG = os.path.join(SHARED_DIR, "assets", "chameleon_icon.png")
 
 # Sidebar'dan acilan her yontemin tanitim sayfasi -- chameleon_gui.py'deki
@@ -313,6 +316,14 @@ METHOD_INFO = {
     },
 }
 
+# Bir yontem tanitim sayfasindaki kavramsal olarak agir bir konu icin
+# Bilgi Merkezi'nde detayli anlatim varsa buraya eklenir -- yontem
+# sayfasinda otomatik bir "Bu ne demek?" linki cikar (bkz. _show_method_detail).
+METHOD_HELP_TOPIC = {
+    "tor": "tor_onion_operator_key",
+    "ram": "ram_full_mode_driver",
+}
+
 
 class SidebarButton(QPushButton):
     """
@@ -363,19 +374,366 @@ class BodyText(QLabel):
         self.setWordWrap(True)
 
 
+class TargetKitWorker(QThread):
+    """Hedef taraf sihirbazinda "Bağlantıyı Başlat"a basilinca calisir --
+    gomulu Tor'u ayaga kaldirip hidden service kurmak dakikalar surebilir
+    (bkz. portable_kit/tor_manager.py timeout'lari), bu yuzden UI thread'ini
+    bloke etmemek icin ayri thread'de calistirilir (ayni desen:
+    gui_v2.py'deki ConnectWorker)."""
+    done = Signal(object)   # basarili olursa HiddenServiceHandle
+    error = Signal(str)
+
+    def __init__(self, operator_public_key, parent=None):
+        super().__init__(parent)
+        self.operator_public_key = operator_public_key
+
+    def run(self):
+        if PORTABLE_KIT_DIR not in sys.path:
+            sys.path.insert(0, PORTABLE_KIT_DIR)
+        try:
+            from tor_manager import start_hidden_service
+        except ImportError as exc:
+            self.error.emit(f"Bağlantı modülü yüklenemedi: {exc}")
+            return
+
+        try:
+            handle = start_hidden_service(self.operator_public_key)
+        except Exception as exc:
+            self.error.emit(f"Bağlantı kurulurken beklenmedik bir hata oldu: {exc}")
+            return
+
+        if handle is None:
+            self.error.emit(
+                "Bağlantı kurulamadı. Anahtarı doğru yapıştırdığınızdan emin olun ve "
+                "tekrar deneyin."
+            )
+            return
+        self.done.emit(handle)
+
+
 class ChameleonWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.lang = "tr"
         self.active_nav = "home"
+        self._target_handle = None
+        self._target_worker = None
+        # Bir arac ekranindaki ("SSH ile Uzak Imaj Al"/"RAM Imaji Al")
+        # "Bu ne demek?" linkinden Bilgi Merkezi'ne gecilince, o ekran
+        # (doldurulmus form + varsa acik SSH baglantisi/worker thread ile
+        # birlikte) SILINMEDEN burada canli tutulur -- bkz. _show_help_from_tool.
+        self._return_page = None
+        self._return_nav = None
         self._set_window_icon()
-        self._build_shell()
-        self._show_home()
+        self._show_role_select()
+
+    def closeEvent(self, event):
+        """Hedef taraf sihirbazinda acik birakilmis bir Tor sureci varsa,
+        pencere kapanirken orphan process kalmasin diye kapatilir. Bilgi
+        Merkezi'nde bekleyen (henuz "Geri" ile donulmemis) bir arac ekrani
+        varsa o da temizlenir."""
+        self._target_cleanup()
+        if self._return_page is not None:
+            self._return_page.deleteLater()
+            self._return_page = None
+        super().closeEvent(event)
 
     # -- Pencere ikonu ----------------------------------------------------
     def _set_window_icon(self):
         if os.path.exists(ICON_PNG):
             self.setWindowIcon(QIcon(ICON_PNG))
+
+    # -- Rol secimi (uygulama acilir acilmaz ilk ekran) ---------------------
+    def _show_role_select(self):
+        """
+        Uygulama HER ACILISTA (kayitli bir tercih yok -- her defasinda
+        farkli bir kisi kullaniyor olabilir) bunu once sorar: "Operatörüm"
+        secilirse normal sidebar/launcher akisi (_build_shell + _show_home)
+        acilir, hic degismedi. "Bu Cihaz Inceleniyor" secilirse -- yani bu
+        makineye SAHADAKI, teknik bilgisi olmayabilecek kisi oturmussa --
+        sidebar/RAM-imaji/SSH-araclari gibi operator arac seti HIC
+        GOSTERILMEZ, sadece Tor kitini calistirmaya yarayan, adim adim
+        anlatilmis ayri bir sihirbaz (_show_target_wizard) acilir. Boylece
+        ayni .exe iki farkli kisiye iki farkli, o kisiye uygun deneyim
+        sunar (bkz. kullanicinin bu konudaki geri bildirimi).
+        """
+        self.setWindowTitle(t("title", self.lang))
+        central = QWidget()
+        layout = QVBoxLayout(central)
+        layout.setContentsMargins(48, 40, 48, 40)
+        layout.setSpacing(ui.CARD_GAP)
+        layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+
+        header = QHBoxLayout()
+        if os.path.exists(ICON_PNG):
+            logo = QLabel()
+            logo.setPixmap(QPixmap(ICON_PNG).scaledToHeight(28, Qt.TransformationMode.SmoothTransformation))
+            header.addWidget(logo)
+        name = QLabel(t("title", self.lang))
+        name.setStyleSheet(f"font-family:'{ui.FONT_UI}'; font-size:16px; font-weight:600; color:{ui.TEXT_MAIN};")
+        header.addWidget(name)
+        header.addStretch()
+        layout.addLayout(header)
+        layout.addSpacing(12)
+
+        title = QLabel("Bu bilgisayardaki kişi kimsiniz?")
+        title.setStyleSheet(f"color:{ui.TEXT_MAIN}; font-family:'{ui.FONT_UI}'; font-size:20px; font-weight:600;")
+        layout.addWidget(title)
+
+        subtitle = QLabel("Devam etmeden önce rolünüzü seçin -- ekranın geri kalanı buna göre değişir.")
+        subtitle.setStyleSheet(f"color:{ui.TEXT_SECONDARY}; font-family:'{ui.FONT_UI}'; font-size:{ui.SIZE_HELPER}px;")
+        layout.addWidget(subtitle)
+        layout.addSpacing(8)
+
+        row = QHBoxLayout()
+        row.setSpacing(ui.CARD_GAP)
+
+        op_card = widgets.Card("Operatörüm (İnceleyen)")
+        op_desc = BodyText(
+            "Delil topluyorum -- bir hedef cihaza bağlanacağım ya da bu bilgisayarın kendi "
+            "belleğini/diskini inceleyeceğim.", secondary=False
+        )
+        op_desc.setWordWrap(True)
+        op_card.body.addWidget(op_desc)
+        op_btn = widgets.PrimaryButton("Operatör Olarak Devam Et")
+        op_btn.clicked.connect(self._enter_operator_mode)
+        op_card.body.addWidget(op_btn)
+        row.addWidget(op_card)
+
+        tg_card = widgets.Card("Bu Cihaz İnceleniyor")
+        tg_desc = BodyText(
+            "Bir operatör, bu bilgisayardan uzaktan veri toplayabilmek için benden bir "
+            "bağlantı kanalı açmamı istedi (Tor \"acil durum\" kiti).", secondary=False
+        )
+        tg_desc.setWordWrap(True)
+        tg_card.body.addWidget(tg_desc)
+        tg_btn = widgets.PrimaryButton("Bu Cihazla Devam Et")
+        tg_btn.clicked.connect(self._show_target_wizard)
+        tg_card.body.addWidget(tg_btn)
+        row.addWidget(tg_card)
+
+        layout.addLayout(row)
+        layout.addStretch()
+
+        self.setCentralWidget(central)
+
+    def _enter_operator_mode(self):
+        self._build_shell()
+        self._show_home()
+
+    # -- Hedef taraf sihirbazi (Tor "acil durum" kiti) -----------------------
+    def _step_card(self, number, heading):
+        """Numarali bir sihirbaz adimi icin kart + o adima ozel icerigin
+        eklenecegi (baslikla ayni girintideki) dikey layout'u doner."""
+        card = widgets.Card("")
+        row = QHBoxLayout()
+        row.addWidget(widgets.StepBadge(number), alignment=Qt.AlignmentFlag.AlignTop)
+        col = QVBoxLayout()
+        col.setSpacing(8)
+        heading_lbl = QLabel(heading)
+        heading_lbl.setWordWrap(True)
+        heading_lbl.setStyleSheet(f"color:{ui.TEXT_MAIN}; font-family:'{ui.FONT_UI}'; font-size:{ui.SIZE_BODY}px; font-weight:600;")
+        col.addWidget(heading_lbl)
+        row.addLayout(col, stretch=1)
+        card.body.addLayout(row)
+        return card, col
+
+    def _show_target_wizard(self):
+        self.setWindowTitle(t("title", self.lang))
+        central = QWidget()
+        outer = QVBoxLayout(central)
+        outer.setContentsMargins(0, 0, 0, 0)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        inner = QWidget()
+        layout = QVBoxLayout(inner)
+        layout.setContentsMargins(48, 32, 48, 32)
+        layout.setSpacing(ui.CARD_GAP)
+        scroll.setWidget(inner)
+        outer.addWidget(scroll)
+
+        header = QHBoxLayout()
+        back_btn = widgets.SecondaryButton("← Geri")
+        back_btn.clicked.connect(self._back_from_target_wizard)
+        header.addWidget(back_btn)
+        title = QLabel("Bu Cihazın İncelenmesi İçin Bağlantı Kanalı Aç")
+        title.setWordWrap(True)
+        title.setStyleSheet(f"color:{ui.TEXT_MAIN}; font-family:'{ui.FONT_UI}'; font-size:{ui.SIZE_TITLE}px; font-weight:600;")
+        header.addWidget(title, stretch=1)
+        layout.addLayout(header)
+
+        intro = QLabel(
+            "Bu ekran, bir operatörün bu bilgisayara UZAKTAN, güvenli bir şekilde "
+            "bağlanabilmesi için gereken teknik kanalı açar. Hiçbir dosyanız/veriniz bu "
+            "ekrandan paylaşılmaz -- sadece operatörün önceden size verdiği anahtarla "
+            "açılan, sadece ONA açık bir bağlantı noktası oluşturulur."
+        )
+        intro.setWordWrap(True)
+        intro.setStyleSheet(f"color:{ui.TEXT_SECONDARY}; font-family:'{ui.FONT_UI}'; font-size:{ui.SIZE_HELPER}px;")
+        layout.addWidget(intro)
+
+        # Adim 1: anahtar gir
+        step1, col1 = self._step_card(1, "Operatör Anahtarını Girin")
+        col1.addWidget(BodyText(
+            "Operatörünüzden ÖNCEDEN aldığınız anahtarı (telefon/e-posta ile size iletilmiş "
+            "olmalı) aşağıya yapıştırın. Bu, sadece operatörün bu kanaldan bağlanabilmesini "
+            "sağlayan bir kod -- bir şifre değildir, kimseye zarar veremez.", secondary=True
+        ))
+        self.target_key_input = widgets.MonoInput()
+        self.target_key_input.setPlaceholderText("Operatörden aldığınız anahtarı buraya yapıştırın")
+        col1.addWidget(self.target_key_input)
+
+        # Yapistirilan anahtarin kisa bir "parmak izi" -- sahadaki kisi bunu
+        # telefonla operatore okuyup dogru anahtari yapistirdigini teyit
+        # edebilsin diye (guvenlik incelemesinde bulunan gercek bir bosluk:
+        # onceden yapistirilan anahtar HICBIR sekilde dogrulanmiyordu, yanlis/
+        # saldirgan bir anahtar da sessizce kabul edilirdi).
+        self.target_key_fingerprint = QLabel("")
+        self.target_key_fingerprint.setWordWrap(True)
+        self.target_key_fingerprint.setStyleSheet(
+            f"color:{ui.ACCENT_TEXT}; font-family:'{ui.FONT_MONO}'; font-size:{ui.SIZE_HELPER}px; font-weight:600;"
+        )
+        self.target_key_fingerprint.hide()
+        col1.addWidget(self.target_key_fingerprint)
+        self.target_key_input.textChanged.connect(self._update_target_key_fingerprint)
+
+        col1.addWidget(BodyText(
+            "Başlatmadan önce yukarıdaki kodu telefonla operatöre okuyup, "
+            "kendi ekranındaki kodla AYNI olduğunu teyit edin.", secondary=True
+        ))
+        layout.addWidget(step1)
+
+        # Adim 2: baslat
+        step2, col2 = self._step_card(2, "Bağlantıyı Başlatın")
+        col2.addWidget(BodyText(
+            "Aşağıdaki butona basın ve bekleyin -- bu, cihazınızın bir güvenlik ağı "
+            "(Tor) üzerinden geçici bir kanal açmasını sağlar; birkaç dakika sürebilir.",
+            secondary=True
+        ))
+        self.target_start_btn = widgets.PrimaryButton("Bağlantıyı Başlat")
+        self.target_start_btn.clicked.connect(self._target_start)
+        col2.addWidget(self.target_start_btn)
+        self.target_status_label = QLabel("")
+        self.target_status_label.setWordWrap(True)
+        self.target_status_label.setStyleSheet(f"color:{ui.TEXT_SECONDARY}; font-family:'{ui.FONT_UI}'; font-size:{ui.SIZE_HELPER}px;")
+        self.target_status_label.hide()
+        col2.addWidget(self.target_status_label)
+        layout.addWidget(step2)
+
+        # Adim 3: adresi ilet (basarili olunca gorunur)
+        step3, col3 = self._step_card(3, "Oluşan Adresi Operatöre İletin")
+        col3.addWidget(BodyText(
+            "Aşağıda çıkan adresi KENDİ telefonunuzla fotoğraflayın/yazın ve operatöre "
+            "KENDİ mesajlaşma kanalınızla (SMS, telefonla okuyarak vb.) iletin -- bu "
+            "cihazın kendi ağı/uygulamaları hiç kullanılmaz.", secondary=True
+        ))
+        onion_row = QHBoxLayout()
+        self.target_onion_input = widgets.MonoInput()
+        self.target_onion_input.setReadOnly(True)
+        onion_row.addWidget(self.target_onion_input, stretch=1)
+        copy_btn = widgets.SecondaryButton("Kopyala")
+        copy_btn.clicked.connect(self._target_copy_onion)
+        onion_row.addWidget(copy_btn)
+        col3.addLayout(onion_row)
+        stop_btn = widgets.SecondaryButton("Bağlantıyı Kapat")
+        stop_btn.clicked.connect(self._target_stop)
+        col3.addWidget(stop_btn)
+        self.target_result_card = step3
+        self.target_result_card.hide()
+        layout.addWidget(step3)
+
+        layout.addStretch()
+        self.setCentralWidget(central)
+
+    def _back_from_target_wizard(self):
+        self._detach_target_worker()
+        self._target_cleanup()
+        self._show_role_select()
+
+    def _detach_target_worker(self):
+        """Sihirbazdan (henuz "Bağlantıyı Başlat"in sonucu gelmeden) cikilirsa
+        calisan TargetKitWorker durdurulamaz (start_hidden_service() stem'in
+        bloke eden bir cagrisi, disaridan iptal edilemiyor) -- ama sinyalleri
+        artik SILINMIS olan sihirbaz widget'larina (target_start_btn vb.)
+        baglı kalirsa, sonuc gec gelince RuntimeError ile cokerdi. Sinyalleri
+        koparip, basarili olursa (biz zaten ayrildiktan sonra) sahipsiz bir
+        Tor sureci kalmasin diye hemen kapatacak sekilde yeniden baglıyoruz."""
+        worker = self._target_worker
+        if worker is None or not worker.isRunning():
+            return
+        try:
+            worker.done.disconnect()
+            worker.error.disconnect()
+        except (TypeError, RuntimeError):
+            pass
+        worker.done.connect(lambda handle: handle.close())
+
+    def _update_target_key_fingerprint(self, text):
+        key = text.strip()
+        if not key:
+            self.target_key_fingerprint.hide()
+            return
+        self.target_key_fingerprint.setText(f"Kod: {key_fingerprint(key)}")
+        self.target_key_fingerprint.show()
+
+    def _target_start(self):
+        if self._target_handle is not None:
+            return  # zaten bagli -- once "Baglantiyi Kapat" gerekir
+        key = self.target_key_input.text().strip()
+        if not key:
+            self.target_status_label.setStyleSheet(f"color:{ui.ERROR}; font-family:'{ui.FONT_UI}'; font-size:{ui.SIZE_HELPER}px;")
+            self.target_status_label.setText("Önce operatör anahtarını girin.")
+            self.target_status_label.show()
+            return
+
+        self.target_start_btn.setEnabled(False)
+        self.target_start_btn.setText("Başlatılıyor... (birkaç dakika sürebilir)")
+        self.target_status_label.setStyleSheet(f"color:{ui.TEXT_SECONDARY}; font-family:'{ui.FONT_UI}'; font-size:{ui.SIZE_HELPER}px;")
+        self.target_status_label.setText("Bağlantı hazırlanıyor, lütfen bekleyin...")
+        self.target_status_label.show()
+
+        self._target_worker = TargetKitWorker(key)
+        self._target_worker.done.connect(self._on_target_started)
+        self._target_worker.error.connect(self._on_target_error)
+        self._target_worker.start()
+
+    def _on_target_started(self, handle):
+        self._target_handle = handle
+        # Buton BILEREK devre disi/"Bagli" yaziyor kaliyor -- zaten aktif bir
+        # baglanti varken tekrar "Baslat"a basilip ikinci bir hidden service
+        # kurulmaya calisilmasin diye (once "Baglantiyi Kapat" gerekir).
+        self.target_start_btn.setEnabled(False)
+        self.target_start_btn.setText("Bağlı")
+        self.target_status_label.hide()
+        self.target_key_input.setEnabled(False)
+        self.target_onion_input.setText(f"{handle.onion_address}.onion")
+        self.target_result_card.show()
+
+    def _on_target_error(self, msg):
+        self.target_start_btn.setEnabled(True)
+        self.target_start_btn.setText("Bağlantıyı Başlat")
+        self.target_status_label.setStyleSheet(f"color:{ui.ERROR}; font-family:'{ui.FONT_UI}'; font-size:{ui.SIZE_HELPER}px;")
+        self.target_status_label.setText(msg)
+        self.target_status_label.show()
+
+    def _target_copy_onion(self):
+        QApplication.clipboard().setText(self.target_onion_input.text())
+
+    def _target_stop(self):
+        self._target_cleanup()
+        self.target_start_btn.setEnabled(True)
+        self.target_start_btn.setText("Bağlantıyı Başlat")
+        self.target_result_card.hide()
+        self.target_key_input.setEnabled(True)
+        self.target_key_input.clear()
+        self.target_status_label.setStyleSheet(f"color:{ui.TEXT_SECONDARY}; font-family:'{ui.FONT_UI}'; font-size:{ui.SIZE_HELPER}px;")
+        self.target_status_label.setText("Bağlantı kapatıldı.")
+        self.target_status_label.show()
+
+    def _target_cleanup(self):
+        if self._target_handle is not None:
+            self._target_handle.close()
+            self._target_handle = None
 
     # -- Kabuk: sidebar + icerik alani (tema/dil degisince YENIDEN kurulur) --
     def _build_shell(self):
@@ -450,6 +808,7 @@ class ChameleonWindow(QMainWindow):
             ("vpn", "shield", "VPN", self._show_vpn_detail),
             ("tor", "shield-alert", "Tor (Acil Durum)" if lang == "tr" else "Tor (Emergency)", self._show_tor_detail),
             ("ram", "cpu", "RAM İmajı Al" if lang == "tr" else "RAM Image", self._show_ram_detail),
+            ("help", "info", "Bilgi Merkezi" if lang == "tr" else "Help Center", self._show_help),
             ("settings", "settings", "Ayarlar" if lang == "tr" else "Settings", self._show_settings),
         ]
         for key, icon_name, label, handler in nav_items:
@@ -554,6 +913,10 @@ class ChameleonWindow(QMainWindow):
         body.addWidget(title)
         body.addWidget(BodyText(info["what"]))
 
+        topic_key = METHOD_HELP_TOPIC.get(nav_key)
+        if topic_key:
+            body.addWidget(self._help_link(topic_key, "Bu ne demek? (Bilgi Merkezi'nde oku)"))
+
         body.addWidget(self._info_section("Ne zaman kullanılır?" if lang == "tr" else "When to use it?", info["when"]))
         body.addWidget(self._info_section("Gerekenler (sırasıyla)" if lang == "tr" else "Requirements (in order)", info["requires"], numbered=True))
         body.addWidget(self._info_section("Adım adım kullanım" if lang == "tr" else "Step by step", info["steps"], numbered=True))
@@ -583,6 +946,24 @@ class ChameleonWindow(QMainWindow):
         row_w.setLayout(row)
         body.addWidget(row_w)
         body.addStretch()
+
+    def _help_link(self, topic_key, label=None):
+        """Bilgi Merkezi'ndeki bir konuya dogrudan goturen, mavi metin
+        gorunumlu kucuk bir buton -- shared/help_content.py'deki basligi
+        varsayilan etiket olarak kullanir."""
+        topic = get_topic(topic_key)
+        if topic is None:
+            return QLabel("")
+        btn = QPushButton(label or f"Bu ne demek? ({topic['title']})")
+        btn.setFlat(True)
+        btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn.setStyleSheet(
+            f"QPushButton {{ color:{ui.ACCENT_TEXT}; background:transparent; border:none; "
+            f"text-align:left; font-family:'{ui.FONT_UI}'; font-size:{ui.SIZE_HELPER}px; "
+            f"padding:2px 0; }} QPushButton:hover {{ color:{ui.ACCENT_HOVER}; }}"
+        )
+        btn.clicked.connect(lambda: self._show_help(topic_key))
+        return btn
 
     def _info_section(self, heading, items, numbered=False):
         card = widgets.Card(heading)
@@ -662,6 +1043,134 @@ class ChameleonWindow(QMainWindow):
         body.addWidget(card_row_w)
         body.addStretch()
 
+    # -- Bilgi Merkezi ------------------------------------------------------
+    def _show_help(self, topic_key=None):
+        """Uygulama icindeki cesitli secim/kavramlarin (orn. host key
+        dogrulama, Live/Offline, Tor/.onion) detayli anlatildigi ayri sayfa --
+        icerik shared/help_content.py'den okunur, arac ekranlarindaki "Bu ne
+        demek?" linkleriyle AYNI kaynaktir (bkz. help_content.py).
+
+        topic_key verilirse (bir arac ekranindaki linkten gelindiyse), o
+        konunun kartina otomatik kaydirilir -- QTimer.singleShot(0, ...) ile,
+        cunku scroll alani ilk anda henuz boyutlandirilmamis oluyor, bir
+        sonraki event loop turunda (layout hesaplandiktan sonra) calismasi
+        gerekiyor."""
+        self._set_active_nav("help")
+        page = self._clear_content()
+        lang = self.lang
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        inner = QWidget()
+        inner_layout = QVBoxLayout(inner)
+        inner_layout.setContentsMargins(32, 28, 32, 28)
+        inner_layout.setSpacing(ui.CARD_GAP)
+        scroll.setWidget(inner)
+        page_layout = QVBoxLayout(page)
+        page_layout.setContentsMargins(0, 0, 0, 0)
+        page_layout.addWidget(scroll)
+
+        if self._return_page is not None:
+            back_btn = widgets.SecondaryButton(
+                "← Kaldığınız yere dön" if lang == "tr" else "← Back to where you were"
+            )
+            back_btn.clicked.connect(self._return_from_help)
+            inner_layout.addWidget(back_btn)
+
+        title = QLabel("Bilgi Merkezi" if lang == "tr" else "Help Center")
+        title.setStyleSheet(f"color:{ui.TEXT_MAIN}; font-family:'{ui.FONT_UI}'; font-size:18px; font-weight:600;")
+        inner_layout.addWidget(title)
+
+        intro = QLabel(
+            "Uygulama içindeki bazı seçeneklerin ne işe yaradığı ve neden var "
+            "olduğu burada daha ayrıntılı anlatılır."
+            if lang == "tr" else
+            "Detailed explanations for some of the choices in the app live here."
+        )
+        intro.setWordWrap(True)
+        intro.setStyleSheet(f"color:{ui.TEXT_SECONDARY}; font-family:'{ui.FONT_UI}'; font-size:{ui.SIZE_HELPER}px;")
+        inner_layout.addWidget(intro)
+
+        topic_cards = {}
+        for topic in HELP_TOPICS:
+            card = widgets.Card(topic["title"])
+            text = QLabel(topic["body"])
+            text.setWordWrap(True)
+            text.setStyleSheet(f"color:{ui.TEXT_MAIN}; font-family:'{ui.FONT_UI}'; font-size:{ui.SIZE_BODY}px;")
+            card.body.addWidget(text)
+            inner_layout.addWidget(card)
+            topic_cards[topic["key"]] = card
+
+        inner_layout.addStretch()
+
+        if topic_key and topic_key in topic_cards:
+            target = topic_cards[topic_key]
+            # ensureWidgetVisible() SADECE kart kismen bile olsa viewport'ta
+            # goruniyorsa neredeyse hic kaydirmiyor (kartin gorunmesi icin
+            # "yeterli" gordugu icin) -- kart sayfanin altlarina yakinsa bu,
+            # kaydirmanin hicbir seye yaramamis gibi hissettiriyor (bkz.
+            # kullanicinin "sanki sayfanin basina atiyor" geri bildirimi).
+            # Bunun yerine kartin USTUNU aciktan viewport'un ustune tasiyoruz
+            # -- "buraya geldin" hissi net olsun diye.
+            def _scroll_to_target(t=target):
+                scroll.verticalScrollBar().setValue(max(0, t.y() - 16))
+            QTimer.singleShot(0, _scroll_to_target)
+
+    def _release_return_page(self):
+        """_return_page'i (varsa) birakir. Icinde HALA CALISAN bir QThread
+        (orn. devam eden bir SSH imaj alma islemi) varsa ONU SESSIZCE
+        SILMEZ -- bir adli bilisim aracinda yari yolda kesilen bir alma
+        islemi, ekranda gorunmeyen bir sayfada saklı kalmasindan cok daha
+        kotu bir sonuc olurdu. Boyle bir durumda sayfa OLDUGU GIBI birakilir,
+        is bitene kadar bir sonraki cagrida tekrar kontrol edilir. Ic
+        yapisini (hangi widget'in hangi worker'i tuttugunu) bilmeye gerek
+        kalmasin diye QThread aramasi generic (findChildren) yapiliyor."""
+        if self._return_page is None:
+            return
+        if any(t.isRunning() for t in self._return_page.findChildren(QThread)):
+            return
+        self._return_page.deleteLater()
+        self._return_page = None
+
+    def _show_help_from_tool(self, topic_key):
+        """SSH/RAM arac ekranlarindaki "Bu ne demek?" linklerinin
+        cagirdigi giris noktasi (on_show_help). Duz _show_help'ten farki:
+        Bilgi Merkezi'ne gecmeden ONCE, o an ekranda duran arac ekranini
+        (doldurulmus form alanlari + varsa acik SSH baglantisi/worker
+        thread dahil) SILMEDEN stack'ten cikarip saklar -- boylece
+        "Kaldığınız yere dön" ile hicbir bilgi kaybetmeden aynen kaldigi
+        yere donulebiliyor (bkz. kullanicinin "bosluklari tekrar
+        doldurmak gerekiyor" geri bildirimi)."""
+        # Daha once "Geri" ile donulmemis, unutulmus bir sayfa varsa (orn.
+        # kullanici Bilgi Merkezi'ndeyken baska bir sidebar ogesine
+        # tikladiysa) onu simdi birak.
+        self._release_return_page()
+
+        if self.stack_layout.count():
+            item = self.stack_layout.takeAt(0)
+            self._return_page = item.widget()
+        self._return_nav = self.active_nav
+        self._show_help(topic_key)
+
+    def _return_from_help(self):
+        if self._return_page is None:
+            return
+        while self.stack_layout.count():
+            old = self.stack_layout.takeAt(0)
+            w = old.widget()
+            if w:
+                # hide() hemen (senkron) etkili olur; deleteLater() bir
+                # sonraki event loop turunu bekledigi icin, sadece ona
+                # guvenmek Bilgi Merkezi sayfasinin bir an icin donen
+                # sayfanin ustunde/altinda kalip gorunmeye devam etmesine
+                # yol aciyordu (headless testte yakalandi).
+                w.hide()
+                w.deleteLater()
+        self.stack_layout.addWidget(self._return_page)
+        self._return_page.show()
+        self._return_page = None
+        self._set_active_nav(self._return_nav)
+
     # -- Ayarlar ----------------------------------------------------------
     def _show_settings(self):
         self._set_active_nav("settings")
@@ -722,7 +1231,7 @@ class ChameleonWindow(QMainWindow):
         page_layout = QVBoxLayout(page)
         page_layout.setContentsMargins(0, 0, 0, 0)
         ssh_widget = ForensicWidget(
-            on_back=self._show_home,
+            on_back=self._show_home, on_show_help=self._show_help_from_tool,
             initial_case_id=case.get("case_id", ""), initial_examiner=case.get("examiner", ""),
             initial_custodian=case.get("custodian", ""), initial_connection_method=connection_method,
         )
@@ -742,7 +1251,7 @@ class ChameleonWindow(QMainWindow):
         page_layout = QVBoxLayout(page)
         page_layout.setContentsMargins(0, 0, 0, 0)
         ram_widget = RamEngineWidget(
-            on_back=self._show_home,
+            on_back=self._show_home, on_show_help=self._show_help_from_tool,
             initial_case_id=case.get("case_id", ""), initial_examiner=case.get("examiner", ""),
             initial_custodian=case.get("custodian", ""),
         )

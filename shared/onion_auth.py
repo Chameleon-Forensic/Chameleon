@@ -15,9 +15,15 @@ SHA-512 genisletmesi gerekmiyor), cryptography kutuphanesinin X25519
 ham bayt cikisini dogrudan Tor'un base32 formatina ceviriyoruz.
 """
 import base64
+import hashlib
+import re
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
+
+# x25519 anahtarlarinin (32 bayt ham veri) base32/dolgusuz/kucuk harf
+# kodlamasi HER ZAMAN 52 karakter uretir (bkz. generate_keypair()).
+_B32_KEY_RE = re.compile(r"^[a-z2-7]{52}$")
 
 
 def _b32_encode(raw: bytes) -> str:
@@ -71,6 +77,41 @@ def public_key_from_private(private_b32: str) -> str:
         format=serialization.PublicFormat.Raw,
     )
     return _b32_encode(public_raw)
+
+
+def is_valid_key_b32(text: str) -> bool:
+    """
+    Bir x25519 anahtarinin (public ya da private) beklenen bicimde
+    (52 karakter, base32 dolgusuz kucuk harf) olup olmadigini kontrol
+    eder. Guvenlik denetiminde bulunan bir bosluk icin eklendi: hem
+    tor_client.py'nin ONION_CLIENT_AUTH_ADD hem tor_manager.py'nin
+    ClientAuthV3 degeri Tor'a HAM control-protokol komutu icine
+    yerlestiriliyordu, formati hic dogrulanmadan -- yapistirilan/
+    dosyadan okunan deger CR/LF gibi kontrol karakterleri icerirse
+    (bozuk kopyalama, elle duzenleme, gelecekte baska bir girdi yolu)
+    ayni control-protokol mesajina ikinci, istenmeyen bir komut
+    enjekte edilebilirdi. Bu fonksiyon her iki tarafta da (dosyadan
+    okunan operator anahtari ve GUI'de yapistirilan anahtar) kullanim
+    ONCESI cagrilir.
+    """
+    if not text:
+        return False
+    return bool(_B32_KEY_RE.match(text.strip()))
+
+
+def key_fingerprint(public_b32: str) -> str:
+    """
+    Bir operator ACIK anahtarindan, telefonla sesli okunup karsi tarafla
+    karsilastirilabilecek kisa bir kod uretir (orn. "3F2A-9C11-88DE").
+    Hem operator ekraninda (kendi anahtarinin yaninda) hem sahadaki kisinin
+    hedef taraf sihirbazinda (yapistirdigi anahtarin yaninda) AYNI hash
+    fonksiyonuyla gosterilir -- boylece sahadaki kisi, operatore anahtari
+    dogru yapistirdigini sozlu olarak teyit ettirebilir. Guvenlik denetiminde
+    bulunan gercek bir bosluk icin eklendi: onceden yapistirilan anahtar hic
+    dogrulanmiyordu, yanlis/saldirgan bir anahtar da sessizce kabul edilirdi.
+    """
+    digest = hashlib.sha256(public_b32.strip().encode("utf-8")).hexdigest().upper()
+    return "-".join(digest[i:i + 4] for i in range(0, 12, 4))
 
 
 if __name__ == "__main__":

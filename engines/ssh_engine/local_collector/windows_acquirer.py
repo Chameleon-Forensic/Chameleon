@@ -68,6 +68,19 @@ def apply_write_block_windows(ssh, disk_number):
     return basarili
 
 
+def is_write_blocked_windows(ssh, disk_number):
+    """apply_write_block_windows()'un aksine hicbir sey DEGISTIRMEZ, SADECE
+    diskin O ANDA salt-okunur olup olmadigini kontrol eder -- resume
+    sirasinda "onceden oyleydi, hala oyledir" varsayimini korumak yerine
+    gercekten dogrulamak icin (bkz. write_block_helper.is_write_blocked,
+    ayni gerekce -- Windows'ta da bu ayar reboot'ta kalici degil).
+    Donus: True/False, ya da None (kontrol edilemedi -- SSH hatasi)."""
+    out, _err, _code = ssh.run_command(f"(Get-Disk -Number {int(disk_number)}).IsReadOnly")
+    if out is None:
+        return None
+    return out.strip().lower() == "true"
+
+
 def get_disk_size_bytes_windows(ssh, disk_number):
     cmd = f"(Get-Disk -Number {int(disk_number)}).Size"
     out, _err, _code = ssh.run_command(cmd)
@@ -148,6 +161,22 @@ def acquire_disk_image_windows(
             coc.EVENT_EXAM_RESUME,
             f"Imaj alma blok {start_block}'dan devam ettiriliyor (Windows): PhysicalDrive{disk_number}",
         )
+        # bkz. image_acquirer.py'deki AYNI duzeltme: -IsReadOnly reboot'ta
+        # kalici degil, "onceden oyleydi" varsaymak yerine gercek durumu
+        # kontrol edip delil zincirine kaydediyoruz.
+        hala_salt_okunur = is_write_blocked_windows(ssh, disk_number)
+        if hala_salt_okunur is True:
+            coc.log_event(
+                coc.EVENT_WRITE_BLOCK_APPLIED,
+                f"Devam ederken kontrol edildi (Windows): disk hala salt-okunur: PhysicalDrive{disk_number}",
+            )
+        elif hala_salt_okunur is False:
+            coc.log_event(
+                coc.EVENT_WRITE_BLOCK_SKIPPED,
+                f"Devam ederken kontrol edildi (Windows): disk salt-okunur DEGIL "
+                f"(Live modda beklenen bir durum; Offline modda bekleniyorsa incelenmeli): "
+                f"PhysicalDrive{disk_number}",
+            )
         apply_write_blocker = False
     else:
         coc.log_event(coc.EVENT_EXAM_START, f"Imaj alma baslatildi (Windows): PhysicalDrive{disk_number}")

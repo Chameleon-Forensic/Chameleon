@@ -35,6 +35,12 @@ EVENT_VPN_CONNECTION_USED = "VPN_CONNECTION_USED"
 # ama operatorun hedef sistemde TAM OLARAK nereye baktigi izlenebilsin diye
 # her listeleme ayri bir olay olarak kaydedilir.
 EVENT_DIRECTORY_LISTED = "DIRECTORY_LISTED"
+# Operator, sunucunun SSH kimligini (host key) known_hosts'a onceden eklenmis
+# olmasini beklemek yerine dogrulamadan atlamayi sectiginde loglanir -- oyle
+# bir hedefte (orn. sahsa ait cihaz) parmak izini teyit edecek bir yetkili
+# genelde olmadigi icin bu secenek var, ama delil zincirinde ortadaki adam
+# saldirisina karsi bu korumanin aktif OLMADIGI acikca kayit altina alinmali.
+EVENT_HOST_KEY_VERIFICATION_SKIPPED = "HOST_KEY_VERIFICATION_SKIPPED"
 
 # Bu çalıştırmaya ait log dosyasının yolu (ilk log_event çağrısında oluşur)
 _current_log_file = None
@@ -55,6 +61,25 @@ def _get_log_file():
     return _current_log_file
 
 
+def _sanitize_log_field(text):
+    """
+    Log satırları '|' ile ayrılan düz metin (bkz. read_events()). description
+    (ve bazen hash_value) çoğu zaman HEDEF cihazdaki dosya/klasör adlarından
+    geliyor -- yani incelenen tarafın (şüpheli/cihaz sahibi) kontrolünde
+    olabilecek veri. İçinde '|' ya da satır sonu varsa: (a) read_events()
+    parça sayısı uyuşmadığı için o KAYDI SESSİZCE DÜŞÜRÜR (delil kaybı
+    gibi görünür), (b) bir satır sonuna sahte "[ts] | EVENT | .. | hash"
+    deseni eklenirse SAHTE bir log kaydı enjekte edilebilir. Bu yüzden
+    yazılmadan önce kaçırılıyor -- '|' görsel olarak benzeyen ama aynı
+    karakter OLMAYAN bir sembolle ('¦', kırık dikey çizgi) değiştiriliyor,
+    satır sonları boşlukla -- dosya adı okunaklılığını bozmadan.
+    """
+    if text is None:
+        return text
+    text = str(text).replace("|", "¦")
+    return text.replace("\r\n", " ").replace("\n", " ").replace("\r", " ")
+
+
 def log_event(event_type, description, hash_value=None):
     """
     Tek bir chain-of-custody olayını zaman damgası, işlem türü, açıklama
@@ -62,7 +87,8 @@ def log_event(event_type, description, hash_value=None):
     """
     # ISO 8601 UTC zaman damgası (örn. 2026-07-30T00:14:53Z)
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    hash_part = hash_value if hash_value else "-"
+    description = _sanitize_log_field(description)
+    hash_part = _sanitize_log_field(hash_value) if hash_value else "-"
 
     line = f"[{timestamp}] | {event_type} | {description} | {hash_part}"
 

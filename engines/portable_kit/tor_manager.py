@@ -28,6 +28,7 @@ _SHARED_DIR = os.path.join(PORTABLE_KIT_DIR, "..", "..", "shared")
 if os.path.isdir(_SHARED_DIR):
     sys.path.insert(0, _SHARED_DIR)
 from tor_binary import default_tor_binary_path  # noqa: E402
+from onion_auth import is_valid_key_b32  # noqa: E402
 
 
 class HiddenServiceHandle:
@@ -71,6 +72,16 @@ def start_hidden_service(operator_public_key_b32, ssh_port=22, tor_binary_path=N
 
     Donus: basarili olursa HiddenServiceHandle, olmazsa None.
     """
+    # Hedef taraf sihirbazinda sahadaki kisinin YAPISTIRDIGI serbest metin --
+    # stem bunu asagida create_ephemeral_hidden_service()'e ClientAuthV3=
+    # olarak, Tor'un ham control-protokol komutuna DOGRUDAN yerlestirerek
+    # gonderiyor. Tor'a gitmeden ONCE beklenen bicimde oldugunu dogruluyoruz
+    # (bkz. onion_auth.is_valid_key_b32 dokstring'i).
+    operator_public_key_b32 = (operator_public_key_b32 or "").strip()
+    if not is_valid_key_b32(operator_public_key_b32):
+        print("[-] Gecersiz operator anahtari formati.")
+        return None
+
     tor_binary_path = tor_binary_path or default_tor_binary_path()
     if not tor_binary_path:
         print(
@@ -109,7 +120,18 @@ def start_hidden_service(operator_public_key_b32, ssh_port=22, tor_binary_path=N
         port_mapping = 22 if ssh_port == 22 else {22: f"127.0.0.1:{ssh_port}"}
         response = controller.create_ephemeral_hidden_service(
             port_mapping,
-            key_type="ED25519-V3",
+            # key_type="NEW" (varsayilan) + key_content="ED25519-V3": stem
+            # bunlari "ADD_ONION <key_type>:<key_content>" seklinde Tor'a
+            # gonderiyor -- "NEW:ED25519-V3" = "yeni bir ED25519-V3 anahtari
+            # SEN uret". Onceden burada key_type="ED25519-V3" verilmisti;
+            # key_content varsayilani ("BEST") ile birlesince Tor'a tam
+            # olarak "ADD_ONION ED25519-V3:BEST" gidiyordu -- Tor bunu
+            # "ED25519-V3 turunde, ic-icerigi 'BEST' olan HAZIR bir anahtar"
+            # sanip "BEST" metnini anahtar verisi olarak cozmeye calisiyor
+            # ve "Failed to decode ED25519-V3 key" hatasiyla reddediyordu.
+            # Gercek gomulu Tor'a karsi ilk canli testte (bu oturumda)
+            # yakalandi -- daha once hic gercek Tor ile denenmemisti.
+            key_content="ED25519-V3",
             client_auth_v3=operator_public_key_b32,
             await_publication=True,
             timeout=60,

@@ -35,7 +35,7 @@ from hash_verifier import (
     hash_file,
 )
 from ssh_connector import SSHConnector
-from write_block_helper import apply_write_block
+from write_block_helper import apply_write_block, is_write_blocked
 
 BLOCK_SIZE_MB = CHUNK_SIZE // (1024 * 1024)  # hash_verifier ile birebir ayni (4 MB)
 
@@ -333,8 +333,25 @@ def acquire_disk_image(
             coc.EVENT_EXAM_RESUME,
             f"Imaj alma blok {start_block}'dan devam ettiriliyor: {disk_path}",
         )
-        # Disk onceki calistirmada zaten salt-okunur yapilmisti; write-block'u
-        # tekrar uygulamaya calismak zarasizdir ama gereksizdir.
+        # Disk onceki calistirmada salt-okunur yapilmis OLABILIR -- ama
+        # blockdev --setro KALICI DEGIL, hedef aradan gecen surede yeniden
+        # baslatildiysa disk tekrar yazilabilir hale gelmis olabilir. Hangi
+        # modla baslandigi manifestte tutulmadigi icin (bilerek varsayimda
+        # bulunmuyoruz) --setro'yu KORU/tekrar dene yerine sadece GERCEK
+        # durumu kontrol edip delil zincirine dogru sekilde kaydediyoruz --
+        # yorumu (Live'da normal / Offline'da incelenmeli) rapor okuyana birakiyoruz.
+        hala_salt_okunur = is_write_blocked(ssh, disk_path, password=password)
+        if hala_salt_okunur is True:
+            coc.log_event(
+                coc.EVENT_WRITE_BLOCK_APPLIED,
+                f"Devam ederken kontrol edildi: disk hala salt-okunur: {disk_path}",
+            )
+        elif hala_salt_okunur is False:
+            coc.log_event(
+                coc.EVENT_WRITE_BLOCK_SKIPPED,
+                f"Devam ederken kontrol edildi: disk salt-okunur DEGIL (Live modda "
+                f"beklenen bir durum; Offline modda bekleniyorsa incelenmeli): {disk_path}",
+            )
         apply_write_blocker = False
     else:
         coc.log_event(coc.EVENT_EXAM_START, f"Imaj alma baslatildi: {disk_path}")

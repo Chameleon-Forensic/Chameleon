@@ -199,6 +199,203 @@ doğrulandı (`TOPRAKY\yasar:(F)` — sadece mevcut kullanıcı). Dosya normal
 
 ---
 
+## "Bu ne demek?" linkiyle Bilgi Merkezi'ne gidince arac ekranindaki form/baglanti kayboluyordu
+
+**Belirti:** SSH/RAM arac ekranında bir "Bu ne demek?" linkine tıklayıp
+Bilgi Merkezi'ne gidildiğinde, geri dönmenin (sidebar'dan tekrar o
+motoru açmanın) TEK yolu motoru baştan açmaktı — doldurulmuş tüm form
+alanları (host, kullanıcı adı, vaka no vb.) ve varsa kurulmuş bir SSH
+bağlantısı sıfırlanıyordu. Kullanıcı geri bildirdi: "bir yerde bilgi
+al'a basıp bilgi merkezine gidince tekrar başa dönüp boşlukları tekrar
+doldurmak gerekiyor."
+
+**Kök neden:** `_show_help()`, her çağrıldığında `_clear_content()`'i
+çağırıyordu — bu da o an ekranda duran sayfayı (`ForensicWidget`/
+`RamEngineWidget` dahil) `deleteLater()` ile GERÇEKTEN siliyordu. Bu,
+sidebar'dan doğrudan gezinme için doğru davranış (her sayfa bağımsız,
+saklanacak bir şey yok), ama bir arac ekranındaki linkten gelindiğinde
+yanlış — kullanıcının o ana kadarki tüm girdisini yok ediyordu.
+
+**Çözüm:** `on_show_help` callback'i, arac ekranlarına özel yeni bir
+giriş noktasına (`_show_help_from_tool`) bağlandı. Bu metod, Bilgi
+Merkezi'ne geçmeden ÖNCE mevcut sayfayı `stack_layout`'tan SİLMEDEN
+çıkarıp (`takeAt()`, `deleteLater()` çağrılmadan) `self._return_page`'de
+canlı tutuyor. Bilgi Merkezi sayfasında bu durumda bir "← Kaldığınız
+yere dön" butonu beliriyor (`_return_from_help`), tıklanınca AYNI widget
+instance'ı (tüm doldurulmuş alanları ve varsa açık SSH bağlantısıyla
+birlikte) `stack_layout`'a geri ekleniyor, sidebar'daki aktif seçim de
+eski haline dönüyor. Eski widget'ları `deleteLater()` ile kaldırırken
+`hide()`'ın da hemen (senkron) çağrılması gerekti — `deleteLater()` tek
+başına bir sonraki event loop turunu beklediği için, headless testte
+Bilgi Merkezi içeriğinin "geri dön"den sonra bir an ekranda kalmaya
+devam ettiği (eski widget silinmeden yeni widget'ın altında/üstünde
+görünmez ama hâlâ boyalı) yakalandı.
+
+**Sonuç:** Hem SSH hem RAM motoru ekranında test edildi: forma değer
+girilip "Bu ne demek?"e basıldı, Bilgi Merkezi'nde ilgili konuya
+kaydırıldığı ve "Geri dön" butonunun göründüğü doğrulandı, geri
+dönülünce AYNI widget instance'ının (Python nesne kimliğiyle
+karşılaştırılarak) ve girilen tüm değerlerin korunduğu doğrulandı.
+Ayrıca "Geri" kullanılmadan başka bir sidebar sayfasına geçilip
+sonra tekrar bir arac ekranından Bilgi Merkezi'ne gidilmesi de (eski,
+"unutulmuş" sayfanın sessizce temizlenip crash olmadığı) test edildi.
+
+---
+
+## Bilgi Merkezi'nde bazı konulara giden linkler sanki sayfanın başına atıyormuş gibi görünüyordu
+
+**Belirti:** Yukarıdaki düzeltmeden hemen sonra kullanıcı bildirdi:
+"Delil Zinciri Nedir?" gibi bazı linkler tıklanınca Bilgi Merkezi
+açılıyordu ama sanki ilgili karta değil, sayfanın en başına gidiyormuş
+gibi hissettiriyordu.
+
+**Kök neden:** Kaydırma `scroll.ensureWidgetVisible(target, 0, 20)` ile
+yapılıyordu. Bu fonksiyon, hedef widget viewport'ta KISMEN bile olsa
+zaten görünüyorsa, sadece "tam görünür olması için gereken en az"
+miktarda kaydırıyor — hedefi viewport'un ÜSTÜNE getirmeye çalışmıyor.
+Ölçüldüğünde: "Delil Zinciri" kartı sayfanın 3. kartıydı ve kaydırılmamış
+haldeyken viewport'un ALT kenarına zaten kısmen giriyordu (795-1052px
+aralığında, viewport 0-900px) — bu yüzden `ensureWidgetVisible` neredeyse
+hiç kaydırmadı (224/1136), kart viewport'un en altına sıkışmış kaldı ve
+gözden kolayca kaçıyordu. Sayfanın başındaki kartlarda (host key gibi)
+bu fark hiç belli olmuyordu çünkü zaten en az kaydırma gerekiyordu.
+
+**Çözüm:** `ensureWidgetVisible` yerine kaydırma çubuğu doğrudan
+`target.y() - 16` değerine ayarlanıyor (`_show_help`'teki
+`_scroll_to_target()`) — bu, hedef kartın ÜSTÜNÜ viewport'un hemen
+üstüne getiriyor, "buraya geldin" hissi net oluyor. Sayfanın sonuna
+yakın kartlarda (altında yeterli boş içerik olmadığında) doğal olarak
+scrollbar'ın maksimumunda kalıyor — bu beklenen/doğru davranış, herhangi
+bir "anchor" linkte olduğu gibi.
+
+**Sonuç:** 6 konunun tümü ölçülerek doğrulandı — ilk 4 konu kartı
+viewport'un tam 16px üstüne yerleştiriyor, son 2 konu (sayfanın sonuna
+yakın) scrollbar'ın izin verdiği maksimuma kadar kaydırıp kartı olabildiğince
+öne getiriyor. Önceki "Geri dön" (form/bağlantı koruma) testleri de bu
+değişiklikten etkilenmediği doğrulandı. `dist/Chameleon.exe` yeniden
+derlendi.
+
+---
+
+## `tor_manager.py`'de `ADD_ONION` hiç çalışmıyordu (yanlış key_type/key_content)
+
+**Belirti:** Hedef taraf sihirbazı (`_show_target_wizard`) ilk kez
+gerçek gömülü Tor'a karşı test edilirken, "Bağlantıyı Başlat" her zaman
+`"[-] Hidden service olusturulamadi: ADD_ONION response didn't have an
+OK status: Failed to decode ED25519-V3 key"` hatasıyla başarısız oluyordu.
+
+**Kök neden:** `engines/portable_kit/tor_manager.py`'deki
+`start_hidden_service()`, `controller.create_ephemeral_hidden_service()`'i
+`key_type="ED25519-V3"` ile çağırıyordu, `key_content` parametresi ise
+belirtilmediği için varsayılanı (`"BEST"`) kullanıyordu. `stem`, bu
+ikisini `"ADD_ONION %s:%s" % (key_type, key_content)` şeklinde birleştirip
+Tor'a `ADD_ONION ED25519-V3:BEST` gönderiyor — Tor bunu "ED25519-V3
+türünde, HAZIR bir anahtar, içeriği tam olarak 'BEST' metni" olarak
+yorumlayıp bu metni anahtar verisi gibi decode etmeye çalışıp
+reddediyordu. Doğrusu: `key_type` varsayılanında (`"NEW"` = "yeni bir
+anahtar SEN üret") kalmalı, `key_content="ED25519-V3"` (üretilecek
+anahtarın türü) verilmeliydi. Bu kod daha önce sadece mock'lanmış
+Tor/stem ile test edilmişti (bkz. `docs/roadmap.md`'deki "gerçek Tor
+ağı üzerinden canlı test henüz yapılmadı" notu) — mock, gerçek Tor'un
+`ADD_ONION` parametre doğrulamasını hiç taklit etmediği için bu hata
+hiç yakalanmamıştı.
+
+**Çözüm:** `key_type="ED25519-V3"` satırı kaldırıldı, yerine
+`key_content="ED25519-V3"` eklendi (`key_type` varsayılan `"NEW"`'da
+bırakıldı).
+
+**Sonuç:** Gerçek bir operatör anahtarıyla (`onion_auth.generate_keypair()`)
+tekrar denendi — geçerli, gerçek bir `.onion` adresi üretildi
+(`r5z5xf...onion`). "Bağlantıyı Kapat" butonunun Tor sürecini
+gerçekten sonlandırdığı da `tasklist` ile ayrıca doğrulandı (orphan
+process kalmıyor).
+
+---
+
+## Rapordaki "doğrulandı" alanı GUI akışında hiç doldurulmuyordu
+
+**Belirti:** 4 uzman ajanla (Incident Responder/adli bilişim bakış açısı)
+yapılan bir inceleme sırasında bulundu: operatör "İmaj Doğrula" ile
+başarıyla doğrulama yapsa bile, `report.json`/`report.html`'deki
+`verification.verified` alanı HER ZAMAN `false` kalıyordu.
+
+**Kök neden:** `gui_v2.py`, işlem bitince `report.save()`'i HEMEN
+çağırıyor, "Uzak diskin hash'ini biliyor musunuz?" sorusunu bundan
+SONRA soruyordu. `ForensicReport.set_verification()` -- raporun
+`verified`/`hash_match` alanlarını dolduran TEK yer -- sadece `main.py`
+CLI'sinde, GUI'de hiç kullanılmayan bir yolda çağrılıyordu. Yani GUI'nin
+ürettiği rapor, gerçek doğrulama sonucundan tamamen bağımsızdı.
+
+**Çözüm:** `gui_v2.py`'ye `_last_report`/`_last_report_path` eklendi
+(`_show_report_summary`'de doldurulur). `VerifyWorker` artık bunları
+alıp doğrulama sonucunda `report.set_verification(matched)` çağırıp
+`report.save()`'i TEKRAR çalıştırıyor. `set_verification()`, doğrulama
+zamanı raporun `end_time_utc`'sinden sonraysa bu alanı genişletiyor --
+aksi halde `HASH_VERIFIED` olayı, raporun kendi `read_events()` zaman
+penceresi dışında kalıp olay listesine hiç girmezdi (rapor "verified:
+true" derken, aynı rapordaki olay listesi bunu doğrulayan hiçbir kayıt
+göstermezdi). `forensic_report.py`'nin `_append_to_history()`'si de
+aynı `report_path` için ikinci `save()` çağrısında artık Vaka
+Geçmişi'ne yeni bir satır EKLEMİYOR, mevcut satırı GÜNCELLİYOR (aksi
+halde her doğrulama, aynı vakayı listede iki kez gösterirdi).
+
+**Sonuç:** Gerçek bir dosya + gerçek SHA-256 hash ile uçtan uca test
+edildi: doğrulama öncesi `verified: false`, doğrulama sonrası
+`verified: true, hash_match: true`, `HASH_VERIFIED` olayı raporun kendi
+olay listesinde, Vaka Geçmişi'nde tek (duplike olmayan) satır.
+
+---
+
+## Delil zinciri log'u, hedef cihazdaki dosya adlarıyla manipüle edilebiliyordu
+
+**Belirti:** Aynı inceleme turunda (Penetration Tester ajanı) bulundu.
+`chain_of_custody.py` log satırlarını `|` ile ayırıyor
+(`f"[{ts}] | {event_type} | {description} | {hash_part}"`,
+`read_events()` tam 4 parça bekliyor). `description` çoğu zaman HEDEF
+cihazdaki dosya/klasör adlarından geliyor (`file_acquirer.py`:
+`f"Dosya alindi ve dogrulandi: {uzak_dosya}"` gibi) -- yani incelenen
+tarafın (şüpheli/cihaz sahibi) kontrolünde olabilecek veri.
+
+**Kök neden:** Dosya adı sanitize edilmeden doğrudan log satırına
+gömülüyordu. İki somut saldırı senaryosu:
+- **Delil kaybı**: dosya adında `|` varsa, satır 5 parçaya bölünüyor,
+  `len(parts) != 4` kontrolü kaydı SESSİZCE düşürüyor -- o dosyanın
+  alındığına dair kayıt raporda hiç görünmüyor.
+- **Sahte kayıt enjeksiyonu**: dosya adında satır sonu + elle kurgulanmış
+  `[ts] | EVENT | .. | hash` deseni varsa, `read_events()` bunu
+  BAĞIMSIZ, meşru bir log satırı olarak parse edip rapora gömüyor.
+
+**Çözüm:** Yeni `_sanitize_log_field()`, yazmadan önce `description`
+(ve `hash_value`) içindeki `|`'ı görsel olarak benzer ama farklı bir
+sembolle (`¦`, kırık dikey çizgi), satır sonlarını (`\n`/`\r`) boşlukla
+değiştiriyor -- dosya adı okunaklılığı bozulmadan, parçalama artık
+kırılmıyor.
+
+**Sonuç:** Her iki senaryo da (adında `|` olan dosya, adında sahte log
+satırı denemesi olan dosya) ayrı ayrı test edildi -- ikisinde de artık
+2 satır yazılıyor, 2 olay okunuyor, hiçbir kayıt düşmüyor/sahte kayıt
+oluşmuyor.
+
+---
+
+## Rol seçim ekranında iki kart da aynı generic buton metnini taşıyordu
+
+**Belirti:** Kullanıcı, açılıştaki rol seçim ekranında ("Operatörüm" /
+"Bu Cihaz İnceleniyor") her iki kartın altındaki butonun da aynı,
+ayrım yapmayan "Bunu Seç" yazısını taşımasını bildirdi.
+
+**Kök neden:** `chameleon_gui.py`'de iki `PrimaryButton` da aynı sabit
+metinle oluşturulmuştu, kartın kendi kimliğine göre özelleştirilmemişti.
+
+**Çözüm:** Operatör kartının butonu "Operatör Olarak Devam Et", hedef
+cihaz kartının butonu "Bu Cihazla Devam Et" oldu — her ikisi de kendi
+kartının ne yaptığını buton metninde de yansıtıyor.
+
+**Sonuç:** Saf metin değişikliği, davranışta fark yok; headless
+ekran görüntüsüyle iki butonun da taşmadan doğru göründüğü doğrulandı.
+
+---
+
 ## Operasyonel notlar (hata değil, tekrar karşılaşılabilecek sürtünmeler)
 
 - **Git Bash'te `tar` ile Windows sürücü harfi (`C:\...`) sorunu**: `tar`,
@@ -210,3 +407,13 @@ doğrulandı (`TOPRAKY\yasar:(F)` — sadece mevcut kullanıcı). Dosya normal
   kilitliyken yeniden derlemeye çalışmak bu hatayı veriyor. Çözüm:
   derlemeden önce `Get-Process | Where-Object ProcessName -like
   "*Chameleon*" | Stop-Process -Force`.
+- **WSL'de test için açılan `sshd`, socket-activation yüzünden ilk
+  bağlantıda "Unable to connect" veriyordu**: `service ssh start`
+  Ubuntu'da varsayılan olarak `ssh.socket`'i (systemd socket
+  activation) tetikliyor — port dinlemede görünse de, gerçek `sshd`
+  süreci ilk TCP bağlantısı gelene kadar başlamıyor, bu da paramiko'nun
+  ilk denemesinin "Unable to connect to port 22" ile başarısız olmasına
+  yol açıyordu (ikinci deneme genelde başarılı oluyordu, kararsız bir
+  test deneyimi). Çözüm: `systemctl disable/stop ssh.socket` ile
+  socket-activation'ı kapatıp `service ssh start` ile `sshd`'yi
+  doğrudan/kalıcı çalıştırmak.

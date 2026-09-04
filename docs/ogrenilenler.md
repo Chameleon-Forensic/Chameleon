@@ -124,6 +124,51 @@ kısmını önceden bilmeli. Bu, launcher akışında "Tor" seçilince anahtarı
 otomatik üretilip gösterilmesinin ve kullanıcıya "bunu SAHA ZİYARETİNDEN
 ÖNCE iletin" diye açıkça hatırlatılmasının sebebi.
 
+## paramiko'nun host-key doğrulama katmanları: hangisi neyi kontrol ediyor
+
+`SSHClient`'ta host-key kontrolü üç ayrı katmandan geçiyor ve bunları
+karıştırmak kolay:
+
+1. `load_system_host_keys()` → OS'un kendi genel dosyasını (`/etc/ssh/
+   ssh_known_hosts`) `_system_host_keys`'e yükler.
+2. `load_host_keys(path)` → BELİRLİ bir dosyayı `_host_keys`'e yükler
+   VE `_host_keys_filename`'i o path'e ayarlar (sonradan otomatik
+   kaydetme buraya bağlı). **Dosya yoksa `IOError` fırlatır** — önce
+   dosyanın var olduğundan emin olunmalı (gerekirse boş dosya
+   oluşturup sonra yüklemek).
+3. `set_missing_host_key_policy(policy)` → sunucunun anahtarı YUKARIDAKİ
+   İKİ KAYNAKTA DA yoksa (`missing_host_key()` SADECE bu durumda
+   çağrılır) ne yapılacağını belirler: `RejectPolicy` (reddet),
+   `WarningPolicy` (uyarıp kabul et, HİÇBİR ŞEY KAYDETMEZ — bir dahaki
+   bağlantıda yine "bilinmiyor" muamelesi görür), `AutoAddPolicy`
+   (kabul et VE `_host_keys_filename` ayarlıysa diske kaydet — TOFU
+   için bu kullanılmalı, `WarningPolicy` değil).
+
+**En önemli kısım**: sunucunun anahtarı yukarıdaki kaynaklarda ZATEN
+VARSA ama gelen anahtar UYUŞMUYORSA, policy'nin hiçbir etkisi yok —
+paramiko doğrudan `BadHostKeyException` fırlatıyor. Yani bir kez
+"TOFU" ile bir host öğrenildikten sonra, o host'un kimliği değişirse
+(gerçek bir MITM ya da sunucu yeniden kurulumu), `AutoAddPolicy`/
+`WarningPolicy` fark etmeksizin bağlantı KESİN olarak reddediliyor —
+bu davranış "atla" gibi gevşek bir moddan bile bağımsız, üstüne
+yazılamıyor. (Bkz. `ssh_connector.py`'deki `_TofuPolicy` + host key
+TOFU eklenmesi, `docs/roadmap.md`.)
+
+## stem'in `create_ephemeral_hidden_service()`'inde `key_type` ile `key_content` farklı şeyler
+
+`key_type`: "ADD_ONION"'a hangi TÜRDE bir anahtar geldiğini söylüyor —
+`"NEW"` = "bana yeni bir anahtar üret", `"ED25519-V3"`/`"RSA1024"` =
+"sana HAZIR bir anahtar veriyorum, bu türde". `key_content`: `key_type`
+`"NEW"` ise ÜRETİLECEK anahtarın türünü (`"BEST"`/`"ED25519-V3"`),
+`key_type` hazır bir anahtarsa o anahtarın KENDİSİNİ (base64) taşıyor.
+stem bu ikisini olduğu gibi `"ADD_ONION %s:%s"`'e yapıştırıyor — hiçbir
+doğrulama yapmıyor. Yani `key_type="ED25519-V3"` yazıp `key_content`'i
+varsayılanında (`"BEST"`) bırakmak, Tor'a "BEST" kelimesini GERÇEK bir
+anahtar sanıp decode etmesini söylüyor ve sessizce/anlaşılmaz bir
+hatayla reddediliyor. Yeni bir anahtar türü belirlemek istendiğinde
+DOKUNULMASI gereken parametre `key_content`, `key_type` değil (bkz.
+[hatalar_ve_sonuclar.md](hatalar_ve_sonuclar.md)'daki tam vaka).
+
 ## Qt QListWidgetItem'da emoji yerine SVG ikon kullan
 
 `RemoteBrowseDialog` ilk yazıldığında klasör/dosya ögeleri "📁"/"📄"
