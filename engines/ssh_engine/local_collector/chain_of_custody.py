@@ -30,6 +30,11 @@ EVENT_TOR_CONNECTION_ESTABLISHED = "TOR_CONNECTION_ESTABLISHED"
 # tasima katmani degil (SSH dogrudan kuruluyor), sadece delil zincirinde
 # hangi ag yolunun kullanildigi kayit altina aliniyor.
 EVENT_VPN_CONNECTION_USED = "VPN_CONNECTION_USED"
+# Uzak "Gozat" (klasor gezinme) ozelligiyle bir klasorun icerigi listelendi
+# -- salt-okunur (find/Get-ChildItem), hicbir sey yazilmiyor/degistirilmiyor,
+# ama operatorun hedef sistemde TAM OLARAK nereye baktigi izlenebilsin diye
+# her listeleme ayri bir olay olarak kaydedilir.
+EVENT_DIRECTORY_LISTED = "DIRECTORY_LISTED"
 
 # Bu çalıştırmaya ait log dosyasının yolu (ilk log_event çağrısında oluşur)
 _current_log_file = None

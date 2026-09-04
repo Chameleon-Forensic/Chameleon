@@ -123,3 +123,18 @@ yaramaz — kit'in kendisi (ya da onu hazırlayan kişi) o anahtarın AÇIK
 kısmını önceden bilmeli. Bu, launcher akışında "Tor" seçilince anahtarın
 otomatik üretilip gösterilmesinin ve kullanıcıya "bunu SAHA ZİYARETİNDEN
 ÖNCE iletin" diye açıkça hatırlatılmasının sebebi.
+
+## Qt QListWidgetItem'da emoji yerine SVG ikon kullan
+
+`RemoteBrowseDialog` ilk yazıldığında klasör/dosya ögeleri "📁"/"📄"
+emoji karakterleriyle işaretlenmişti — headless (`QT_QPA_PLATFORM=
+offscreen`) test ortamında bunlar kutu (☐) olarak render oldu, çünkü
+Inter gibi bir metin fontu emoji glif içermiyor ve headless ortamda
+sistemin renkli emoji fontuna (Segoe UI Emoji vb.) düşme garantisi yok.
+Gerçek Windows masaüstünde muhtemelen çalışırdı ama platform/ortama
+bağımlı bir varsayım oluyordu. **Çözüm**: `icons.icon("folder"/
+"file-text", ...)` ile app'in kendi Lucide SVG setinden `QIcon` üretip
+`QListWidgetItem(icon, text)` ile vermek — hem headless'ta güvenilir
+render oluyor hem de geri kalan arayüzle (aynı ikon seti, aynı stil)
+tutarlı kalıyor. Genel kural: bu projede metin içine emoji gömmek yerine
+her zaman `shared/ui_kit/icons.py` kullanılmalı.

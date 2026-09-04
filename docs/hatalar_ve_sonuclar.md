@@ -138,6 +138,67 @@ aynı).
 
 ---
 
+## RAM motoru "Full" modda ShellExecuteW argüman kaçırma hatası (CWE-88)
+
+**Belirti:** Güvenlik denetimi sırasında bulundu (kullanıcı istekli
+security-auditor incelemesi). `ram_gui.py`'nin `_run_full_mode()`'u,
+Yönetici (UAC) olarak yükseltilmiş `RamImagerCLI.exe` sürecine giden
+parametreleri şöyle kuruyordu:
+
+```python
+params = " ".join(f'"{a}"' if " " in a else a for a in args[1:])
+```
+
+Bu, sadece BOŞLUK varsa tırnaklıyordu, içindeki `"` karakterini hiç
+kaçırmıyordu.
+
+**Kök neden:** `args` listesine `--case`/`--examiner` doğrudan serbest
+metin "Vaka No"/"İnceleyen" alanlarından giriyordu
+(`self.entry_case.text()`, hiç sanitize edilmeden). Bir operatör bu
+alana `"` karakteri içeren bir metin yazarsa, `"foo" & calc.exe ""` gibi
+bir string üretilip **elevated (UAC onaylı)** sürece giden argüman
+sınırı bozulabiliyordu — ekstra/değiştirilmiş argümanlar kapalı kutu
+`RamImagerCLI.exe`'ye geçebilirdi. Process modu bu riski taşımıyordu
+(düz `subprocess.Popen` liste formu, `ShellExecuteW` kullanmıyor).
+
+**Çözüm:** `subprocess.list2cmdline(args[1:])` ile değiştirildi — Python
+stdlib'in kendi, Windows argv kaçırma kuralını (tırnak/backslash) doğru
+uygulayan fonksiyonu; kendi kaçırma mantığını yazmaktan daha güvenli.
+
+**Sonuç:** Normal girdilerde (boşluk içeren ama tırnak içermeyen metin)
+eski ve yeni kod BİREBİR AYNI çıktıyı üretiyor (test edilip doğrulandı)
+— davranış değişikliği yok. `"` içeren girdilerde eskiden argüman sınırı
+bozuluyordu, artık `"foo\" & calc.exe \""` gibi tek bir argüman olarak
+kalıyor.
+
+---
+
+## Tor operatör özel anahtarı düz metin, dosya izni kısıtlanmamış (CWE-312)
+
+**Belirti:** Güvenlik denetimi sırasında bulundu. `keys/
+operator_tor_key.json` (operatörün Tor client-auth x25519 özel anahtarı
+— bir vakaya kimin bağlanabileceğini belirleyen TEK yetkilendirme
+mekanizması) düz metin JSON olarak yazılıyordu, dosya izni hiç
+sıkılaştırılmıyordu.
+
+**Kök neden:** `gui_v2.py`'deki `_load_or_create_operator_key()`, dosyayı
+`open(key_path, "w")` ile yazdıktan sonra herhangi bir izin ayarlaması
+yapmıyordu. `.gitignore`'da olduğu için commit'e girmiyordu (iyi), ama
+diskte kalan dosya, aynı makineye erişimi olan başka bir yerel kullanıcı
+tarafından okunabilirdi.
+
+**Çözüm:** `_restrict_key_file_permissions(path)` eklendi — POSIX'te
+`os.chmod(path, 0o600)`, Windows'ta ek olarak `icacls path /inheritance:r
+/grant:r <kullanici>:F` (kalıtımlı izinleri kaldırıp sadece mevcut
+kullanıcıya erişim veriyor). Anahtar üretildiği anda (`_load_or_create_
+operator_key()` içinde, dosya yazıldıktan hemen sonra) çağrılıyor.
+
+**Sonuç:** Gerçek bir test dosyasında uygulanıp `icacls` çıktısıyla
+doğrulandı (`TOPRAKY\yasar:(F)` — sadece mevcut kullanıcı). Dosya normal
+şekilde okunup yazılabiliyor, akış bozulmadı.
+
+---
+
 ## Operasyonel notlar (hata değil, tekrar karşılaşılabilecek sürtünmeler)
 
 - **Git Bash'te `tar` ile Windows sürücü harfi (`C:\...`) sorunu**: `tar`,

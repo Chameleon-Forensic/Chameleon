@@ -54,6 +54,39 @@ def list_remote_files(ssh, remote_dir, password=None):
     return [satir for satir in out.splitlines() if satir.strip()]
 
 
+def list_remote_directory(ssh, remote_path, password=None):
+    """
+    remote_path'in DOGRUDAN alt ogelerini (bir seviye, -maxdepth 1) doner --
+    "Gozat" ile gezinme ozelligi icin. Salt-okunur (find), hicbir sey
+    yazmiyor/degistirmiyor. Her cagri chain-of-custody'ye DIRECTORY_LISTED
+    olarak islenir (operatorun hedef sistemde nereye baktigi izlenebilsin).
+
+    Donus: [(isim, is_dir), ...] -- klasorler once, sonra dosyalar, ikisi de
+    kendi icinde alfabetik (buyuk/kucuk harf gozetmeksizin). Yol yoksa/
+    okunamazsa None.
+    """
+    safe = shlex.quote(remote_path)
+    cmd = f"find {safe} -mindepth 1 -maxdepth 1 -printf '%y %f\\n'"
+    if password:
+        out, _err, _code = ssh.run_command(cmd, sudo_password=password)
+    else:
+        out, _err, _code = ssh.run_command(cmd)
+    if out is None:
+        return None
+
+    entries = []
+    for line in out.splitlines():
+        line = line.rstrip("\n")
+        if not line or " " not in line:
+            continue
+        type_char, name = line.split(" ", 1)
+        entries.append((name, type_char == "d"))
+    entries.sort(key=lambda e: (not e[1], e[0].lower()))
+
+    coc.log_event(coc.EVENT_DIRECTORY_LISTED, f"Klasor listelendi: {remote_path}")
+    return entries
+
+
 def get_remote_file_hash(ssh, remote_path, password=None):
     """dd/sha256sum yerine dogrudan sha256sum -- tum dosyayi tek seferde hashler."""
     safe = shlex.quote(remote_path)

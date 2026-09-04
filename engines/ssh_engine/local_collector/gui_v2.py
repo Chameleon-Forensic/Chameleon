@@ -23,13 +23,15 @@ docs/hatalar_ve_sonuclar.md.)
 import datetime
 import os
 import re
+import subprocess
 import sys
 import threading
 
-from PySide6.QtCore import QThread, Signal
+from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtWidgets import (
     QButtonGroup, QComboBox, QDialog, QFileDialog, QHBoxLayout, QLabel,
-    QLineEdit, QMainWindow, QTextEdit, QVBoxLayout, QWidget,
+    QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QTextEdit,
+    QVBoxLayout, QWidget,
 )
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -56,8 +58,12 @@ try:
         local_master_hash,
         find_incomplete_manifest,
     )
-    from file_acquirer import acquire_remote_tree
-    from windows_acquirer import acquire_disk_image_windows, acquire_remote_tree_windows
+    from file_acquirer import acquire_remote_tree, list_remote_directory
+    from windows_acquirer import (
+        acquire_disk_image_windows,
+        acquire_remote_tree_windows,
+        list_remote_directory_windows,
+    )
     from hash_verifier import verify_file, HashMismatchError, HashError
     import chain_of_custody as coc
     import tor_client
@@ -106,6 +112,32 @@ def _parse_progress(text):
     if m:
         return float(m.group(1))
     return None
+
+
+def _restrict_key_file_permissions(path):
+    """
+    Operator Tor ozel anahtarini (keys/operator_tor_key.json) sadece
+    mevcut kullanicinin okuyabilmesi icin izinleri kisitlar -- ayni
+    makinede baska bir yerel kullanici hesabi bu dosyayi okuyamasin diye
+    (dosya .gitignore'da oldugu icin commit'e girmiyor, ama diskte duz
+    metin JSON olarak kaliyor). Best-effort: izin ayarlanamazsa (orn.
+    dosya sistemi desteklemiyorsa) sessizce gecilir, anahtar yine de
+    yazilmis/okunabilir olur -- akisi durdurmaz.
+    """
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
+    if os.name == "nt":
+        user = os.environ.get("USERNAME")
+        if user:
+            try:
+                subprocess.run(
+                    ["icacls", path, "/inheritance:r", "/grant:r", f"{user}:F"],
+                    capture_output=True, check=False,
+                )
+            except OSError:
+                pass
 
 
 # ---------------------------------------------------------------------------
@@ -577,6 +609,109 @@ class VerifyWorker(QThread):
 
 
 # ---------------------------------------------------------------------------
+# Uzak "Gozat" penceresi -- operator yolu elle yazmak yerine tiklayarak
+# gezinebilir. Salt-okunur (list_remote_directory[_windows], find/
+# Get-ChildItem), hicbir sey yazmiyor/degistirmiyor; her klasor acilisi
+# chain-of-custody'ye DIRECTORY_LISTED olarak ayrica loglanir (bkz.
+# file_acquirer.py/windows_acquirer.py).
+# ---------------------------------------------------------------------------
+class RemoteBrowseDialog(QDialog):
+    def __init__(self, ssh, target_os, start_path, parent=None):
+        super().__init__(parent)
+        self.ssh = ssh
+        self.target_os = target_os  # "linux" / "windows"
+        self.current_path = start_path
+        self.selected_path = None
+
+        self.setWindowTitle("Uzak Klasör/Dosya Seç")
+        self.setStyleSheet(f"background-color:{ui.BG_SURFACE};")
+        self.resize(560, 420)
+
+        layout = QVBoxLayout(self)
+
+        path_row = QHBoxLayout()
+        up_btn = widgets.SecondaryButton("↑ Yukarı")
+        up_btn.clicked.connect(self._go_up)
+        path_row.addWidget(up_btn)
+        self.path_label = widgets.MonoLabel(self.current_path)
+        path_row.addWidget(self.path_label, stretch=1)
+        layout.addLayout(path_row)
+
+        self.list_widget = QListWidget()
+        self.list_widget.itemDoubleClicked.connect(self._on_item_double_clicked)
+        layout.addWidget(self.list_widget, stretch=1)
+
+        self.status_label = QLabel("")
+        self.status_label.setStyleSheet(
+            f"color:{ui.TEXT_SECONDARY}; font-family:'{ui.FONT_UI}'; font-size:{ui.SIZE_HELPER}px;"
+        )
+        layout.addWidget(self.status_label)
+
+        btn_row = QHBoxLayout()
+        select_folder_btn = widgets.PrimaryButton("Bu Klasörü Seç")
+        select_folder_btn.clicked.connect(self._select_current_folder)
+        btn_row.addWidget(select_folder_btn)
+        btn_row.addStretch()
+        cancel_btn = widgets.SecondaryButton("İptal")
+        cancel_btn.clicked.connect(self.reject)
+        btn_row.addWidget(cancel_btn)
+        layout.addLayout(btn_row)
+
+        self._refresh()
+
+    def _list_dir(self, path):
+        if self.target_os == "windows":
+            return list_remote_directory_windows(self.ssh, path)
+        return list_remote_directory(self.ssh, path)
+
+    def _refresh(self):
+        self.path_label.setText(self.current_path)
+        self.list_widget.clear()
+        entries = self._list_dir(self.current_path)
+        if entries is None:
+            self.status_label.setText("Klasör okunamadı (izin yok ya da yol bulunamadı).")
+            return
+        if not entries:
+            self.status_label.setText("(boş klasör)")
+            return
+        self.status_label.setText(f"{len(entries)} öge")
+        for name, is_dir in entries:
+            item = QListWidgetItem(icons.icon("folder" if is_dir else "file-text", color=ui.TEXT_MAIN, size=16), name)
+            item.setData(Qt.ItemDataRole.UserRole, (name, is_dir))
+            self.list_widget.addItem(item)
+
+    def _join(self, base, name):
+        sep = "\\" if self.target_os == "windows" else "/"
+        return base.rstrip("/\\") + sep + name
+
+    def _parent(self, path):
+        sep = "\\" if self.target_os == "windows" else "/"
+        trimmed = path.rstrip("/\\")
+        if sep in trimmed:
+            parent = trimmed.rsplit(sep, 1)[0]
+            return parent if parent else sep
+        return path
+
+    def _go_up(self):
+        self.current_path = self._parent(self.current_path)
+        self._refresh()
+
+    def _on_item_double_clicked(self, item):
+        name, is_dir = item.data(Qt.ItemDataRole.UserRole)
+        target = self._join(self.current_path, name)
+        if is_dir:
+            self.current_path = target
+            self._refresh()
+        else:
+            self.selected_path = target
+            self.accept()
+
+    def _select_current_folder(self):
+        self.selected_path = self.current_path
+        self.accept()
+
+
+# ---------------------------------------------------------------------------
 # Ana widget
 # ---------------------------------------------------------------------------
 class ForensicWidget(QWidget):
@@ -812,7 +947,10 @@ class ForensicWidget(QWidget):
         self.lbl_remote_path = QLabel("Uzak Yol (örn. /home/user/belgeler):")
         file_row1.addWidget(self.lbl_remote_path)
         self.entry_remote_path = widgets.MonoInput()
-        file_row1.addWidget(self.entry_remote_path)
+        file_row1.addWidget(self.entry_remote_path, stretch=1)
+        browse_remote_btn = widgets.SecondaryButton("Gözat")
+        browse_remote_btn.clicked.connect(self._browse_remote_path)
+        file_row1.addWidget(browse_remote_btn)
         self.file_card.body.addLayout(file_row1)
 
         file_row2 = QHBoxLayout()
@@ -999,6 +1137,7 @@ class ForensicWidget(QWidget):
         os.makedirs(os.path.dirname(key_path), exist_ok=True)
         with open(key_path, "w", encoding="utf-8") as f:
             json.dump({"private": private_b32, "public": public_b32}, f, indent=2)
+        _restrict_key_file_permissions(key_path)
         self._log(f"[+] Yeni operator anahtarı üretildi ve kaydedildi: {key_path}", "info")
         return private_b32, public_b32
 
@@ -1077,6 +1216,23 @@ class ForensicWidget(QWidget):
         path = QFileDialog.getExistingDirectory(self, "Çıktı Klasörü Seç")
         if path:
             self.entry_file_out.setText(path)
+
+    def _browse_remote_path(self):
+        """
+        'Uzak Yol' icin native QFileDialog KULLANILAMAZ -- o hep BU
+        bilgisayarin diskini gosterir, SSH ile baglanilan uzak hedefin
+        dosya sistemini goremez. Bunun yerine RemoteBrowseDialog, mevcut
+        SSH baglantisi (self.ssh) uzerinden salt-okunur find/Get-ChildItem
+        ile gezinmeyi saglar.
+        """
+        if self.ssh is None:
+            self._show_error("Önce bağlanın (\"Bağlan ve Diskleri Listele\").")
+            return
+        target_os = "windows" if self.radio_os_windows.isChecked() else "linux"
+        start_path = self.entry_remote_path.text().strip() or ("C:\\" if target_os == "windows" else "/")
+        dialog = RemoteBrowseDialog(self.ssh, target_os, start_path, parent=self)
+        if dialog.exec() == QDialog.DialogCode.Accepted and dialog.selected_path:
+            self.entry_remote_path.setText(dialog.selected_path)
 
     # -- Diyaloglar (Tk _modal'in Qt karsiligi) ------------------------------
     def _show_yesno_dialog(self, title, msg):

@@ -183,7 +183,12 @@ class RamWorker(QThread):
 
         self.log.emit(f"$ {' '.join(args)} (Yönetici olarak, UAC istemi gelecek)")
         try:
-            params = " ".join(f'"{a}"' if " " in a else a for a in args[1:])
+            # subprocess.list2cmdline: Windows'un argv kacirma kuralini
+            # (tirnak/backslash) dogru uyguluyor -- eski " ".join(...) sadece
+            # bosluk varsa tirnakliyordu, icindeki " karakterini hic
+            # kacirmiyordu (vaka no/inceleyen gibi serbest metin alanlarindan
+            # yukseltilmis surece arguman enjeksiyonuna acikti).
+            params = subprocess.list2cmdline(args[1:])
             result = ctypes.windll.shell32.ShellExecuteW(None, "runas", args[0], params, None, 1)
             if result <= 32:
                 self.log.emit(f"Yükseltme başarısız (kod {result}) -- UAC reddedildi olabilir.")

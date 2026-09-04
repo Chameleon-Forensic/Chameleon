@@ -303,6 +303,37 @@ def remote_path_kind_windows(ssh, remote_path):
     return {"FILE": "file", "DIR": "dir"}.get(out)
 
 
+def list_remote_directory_windows(ssh, remote_path):
+    """
+    file_acquirer.list_remote_directory ile ayni davranis, PowerShell ile.
+    remote_path'in DOGRUDAN alt ogelerini doner, salt-okunur (Get-ChildItem),
+    hicbir sey yazmiyor/degistirmiyor. Her cagri chain-of-custody'ye
+    DIRECTORY_LISTED olarak islenir.
+
+    Donus: [(isim, is_dir), ...] -- klasorler once, sonra dosyalar.
+    """
+    safe = powershell_quote(remote_path)
+    ps = (
+        f"Get-ChildItem -LiteralPath {safe} -Force -ErrorAction SilentlyContinue | "
+        "ForEach-Object { $t = if ($_.PSIsContainer) { 'd' } else { 'f' }; \"$t $($_.Name)\" }"
+    )
+    out, _err, _code = ssh.run_command(ps)
+    if out is None:
+        return None
+
+    entries = []
+    for line in out.splitlines():
+        line = line.rstrip("\r\n")
+        if not line or " " not in line:
+            continue
+        type_char, name = line.split(" ", 1)
+        entries.append((name, type_char == "d"))
+    entries.sort(key=lambda e: (not e[1], e[0].lower()))
+
+    coc.log_event(coc.EVENT_DIRECTORY_LISTED, f"Klasor listelendi (Windows): {remote_path}")
+    return entries
+
+
 def list_remote_files_windows(ssh, remote_dir):
     safe = powershell_quote(remote_dir)
     ps = f"Get-ChildItem -LiteralPath {safe} -Recurse -File | ForEach-Object {{ $_.FullName }}"

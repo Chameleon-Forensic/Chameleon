@@ -131,8 +131,51 @@ benzer) bulunup giderildi — bkz. [hatalar_ve_sonuclar.md](hatalar_ve_sonuclar.
 Tüm sayfalar headless testle (4 sayfa × 2 dil × 2 tema) ve ekran
 görüntüleriyle doğrulandı.
 
+## 11. Güvenlik denetimi (security auditor gözüyle) + 2 bulgunun düzeltilmesi
+Kullanıcının isteğiyle SSH kimlik bilgileri (paramiko), Tor x25519
+client-auth anahtarları, `RamImagerCLI.exe`/PowerShell/bash subprocess
+çağrıları ve hardcoded secret/güvensiz varsayılan taraması yapıldı (tüm
+ilgili dosyalar okunup tüm kod tabanında regex taraması çalıştırıldı).
+Çoğu alan zaten güvenliydi (parola hiç komut satırına gömülmüyor, hep
+SSH stdin üzerinden; host key doğrulaması varsayılan `RejectPolicy`;
+tüm uzak yollar `shlex.quote`/`powershell_quote` ile kaçırılıyor; chain-
+of-custody logu hiç parola/anahtar içermiyor). İki gerçek bulgu çıktı ve
+ikisi de düzeltildi:
+- **`ram_gui.py` "Full" (Yönetici/UAC) modda `ShellExecuteW` argüman
+  kaçırma hatası** (CWE-88) — parametre string'i sadece boşluk varsa
+  tırnaklıyordu, içindeki `"` karakterini kaçırmıyordu; Vaka No/İnceleyen
+  gibi serbest metin alanlarından yükseltilmiş sürece argüman
+  sızabiliyordu. `subprocess.list2cmdline()` ile değiştirildi (normal
+  girdilerde çıktı birebir aynı — test edilip doğrulandı).
+- **Tor operatör özel anahtarı düz metin, dosya izni kısıtlanmamış**
+  (`keys/operator_tor_key.json`) — `gui_v2.py`'ye
+  `_restrict_key_file_permissions()` eklendi (POSIX: `chmod 600`,
+  Windows: `icacls` ile sadece mevcut kullanıcı). Gerçek dosyada
+  `icacls` çıktısıyla doğrulandı.
+
+Detaylar: [hatalar_ve_sonuclar.md](hatalar_ve_sonuclar.md).
+
+## 12. Uzak "Gözat" (klasör gezinme) özelliği
+Dosya/Klasör modunda önceden uzak yol elle yazılıyordu — native
+`QFileDialog` sadece BU bilgisayarın diskini gösterebildiği için SSH
+hedefini gösteremiyordu. Yeni `RemoteBrowseDialog` (gui_v2.py), mevcut
+SSH bağlantısı üzerinden salt-okunur `find`/`Get-ChildItem` ile hedefte
+klasör klasör gezinmeyi sağlıyor: `file_acquirer.list_remote_directory`/
+`windows_acquirer.list_remote_directory_windows` (tek seviye, hiçbir şey
+yazmıyor). Klasöre çift tıklayınca içine giriyor, dosyaya çift tıklayınca
+seçip kapanıyor, "Bu Klasörü Seç" mevcut klasörü seçiyor. Her klasör
+açılışı chain-of-custody'ye yeni `DIRECTORY_LISTED` olayı olarak ayrıca
+loglanıyor (operatörün nereye baktığı tam izlenebilsin diye — önceden
+elle yazılan bir yolun hiç izi yoktu, bu aslında delil zincirini
+güçlendiriyor). İkonlar app'in kendi Lucide SVG setinden (emoji değil).
+Mock SSH ile Linux+Windows listeleme, gezinme, loglama ve "bağlantı
+yokken Gözat" hata durumu test edildi; ekran görüntüsüyle doğrulandı.
+
 ## Şu an bekleyen
-- Hiçbir şey commit edilmedi — onayınızı bekliyor.
+- Gerçek bir SSH hedefine bağlanıp "Gözat" özelliğinin gerçek cihazda
+  denenmesi (mock testler geçti, gerçek cihaz testi henüz yapılmadı).
+- `dist/Chameleon.exe`'nin bu son değişikliklerle (güvenlik düzeltmeleri
+  + Gözat özelliği) yeniden derlenmesi — henüz yapılmadı.
 - Gerçek Tor ağı üzerinden canlı test (sizinle birlikte).
 - `gui_v2.py`/`ram_gui.py`'nin kendi araç ekranları hâlâ TR-only —
   dil desteği şimdilik sadece launcher'da.
