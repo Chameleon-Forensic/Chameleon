@@ -21,6 +21,7 @@ docs/hatalar_ve_sonuclar.md.)
 """
 
 import datetime
+import json
 import os
 import re
 import subprocess
@@ -29,17 +30,66 @@ import threading
 
 from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtWidgets import (
-    QButtonGroup, QComboBox, QDialog, QFileDialog, QHBoxLayout, QLabel,
+    QButtonGroup, QComboBox, QCompleter, QDialog, QFileDialog, QHBoxLayout, QLabel,
     QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QPushButton, QTextEdit,
     QVBoxLayout, QWidget,
 )
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DEFAULT_IMAGE_PATH = os.path.join(PROJECT_ROOT, "images", "forensic_image.raw")
+
+# PROJECT_ROOT, gui_v2.py'nin (bir "veri" dosyasi olarak paketlenip
+# calisma aninda sys.path.insert()+import ile yuklendigi icin) KENDI
+# __file__'ina gore hesaplanir -- derlenmis exe'de bu dogru sekilde
+# PyInstaller'in bundled kaynaklarini (ornegin _SHARED_DIR/ui_kit) BULUR,
+# o yuzden PROJECT_ROOT'un kendisi degistirilmiyor. Ama varsayilan CIKTI
+# yollari (imaj/anahtar dosyalari -- YAZILACAK seyler) icin _MEIPASS
+# gecici bir klasordur, uygulama kapaninca silinir. Bu ikisi icin ayri,
+# derlenmis modda sys.executable'a (.exe'nin KENDI, KALICI konumu) gore
+# hesaplanan bir kok kullanilir (bkz. chain_of_custody.LOG_DIR ile ayni
+# gerekce, docs/roadmap.md).
+if getattr(sys, "frozen", False):
+    _PERSISTENT_ROOT = os.path.dirname(os.path.abspath(sys.executable))
+else:
+    _PERSISTENT_ROOT = PROJECT_ROOT
+
+DEFAULT_IMAGE_PATH = os.path.join(_PERSISTENT_ROOT, "images", "forensic_image.raw")
 
 _SHARED_DIR = os.path.join(PROJECT_ROOT, "..", "..", "shared")
 if os.path.isdir(_SHARED_DIR):
     sys.path.insert(0, _SHARED_DIR)
+
+# Vaka verisiyle (case_history.json, forensic_report.HISTORY_DIR) AYNI
+# klasor -- .gitignore'daki "shared/data/" zaten kapsiyor, kisisel/vaka
+# verisi hicbir zaman commit edilmez. SADECE host/port/kullanici adi
+# tutulur -- parola KESINLIKLE burada saklanmaz.
+if getattr(sys, "frozen", False):
+    _RECENT_HOSTS_FILE = os.path.join(_PERSISTENT_ROOT, "data", "recent_ssh_hosts.json")
+else:
+    _RECENT_HOSTS_FILE = os.path.join(_SHARED_DIR, "data", "recent_ssh_hosts.json")
+_MAX_RECENT_HOSTS = 5
+
+
+def _load_recent_hosts():
+    try:
+        with open(_RECENT_HOSTS_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, list) else []
+    except (OSError, json.JSONDecodeError):
+        return []
+
+
+def _save_recent_host(host, port, username):
+    if not host:
+        return
+    entries = [e for e in _load_recent_hosts() if e.get("host") != host]
+    entries.insert(0, {"host": host, "port": port, "username": username})
+    entries = entries[:_MAX_RECENT_HOSTS]
+    try:
+        os.makedirs(os.path.dirname(_RECENT_HOSTS_FILE), exist_ok=True)
+        with open(_RECENT_HOSTS_FILE, "w", encoding="utf-8") as f:
+            json.dump(entries, f, indent=2, ensure_ascii=False)
+    except OSError:
+        pass
 from ui_kit import theme_qt as ui, fonts, icons, widgets  # noqa: E402
 from help_content import get_topic  # noqa: E402
 
@@ -56,14 +106,17 @@ try:
     from image_acquirer import (
         acquire_disk_image,
         concatenate_blocks,
+        compress_image,
         local_master_hash,
         find_incomplete_manifest,
+        get_disk_description,
     )
     from file_acquirer import acquire_remote_tree, list_remote_directory
     from windows_acquirer import (
         acquire_disk_image_windows,
         acquire_remote_tree_windows,
         list_remote_directory_windows,
+        get_disk_description_windows,
     )
     from hash_verifier import verify_file, HashMismatchError, HashError
     import chain_of_custody as coc
@@ -330,9 +383,15 @@ class AcquisitionWorker(QThread):
         disk, out_path, mode, password, block_size_mb = (
             c["disk"], c["out_path"], c["mode"], c["password"], c["block_size_mb"],
         )
+        compress = c.get("compress", False)
+        try:
+            disk_description = get_disk_description(self.ssh, disk)
+        except Exception:
+            disk_description = ""
         report = self._new_report(
             engine="ssh_engine", method="disk", target_os="linux",
             target_host=c["host"], source_identifier=disk, acquisition_type=mode,
+            source_description=disk_description,
         )
         self._old_stdout = sys.stdout
         sys.stdout = StdoutRedirector(self._on_stdout)
@@ -435,6 +494,24 @@ class AcquisitionWorker(QThread):
             self.log.emit(f"[BAŞARILI] İmaj birleştirildi: {imaj_yolu}", None)
             master_hash = local_master_hash(imaj_yolu)
             self.log.emit(f"[+] Yerel master SHA-256: {master_hash}", "info")
+            raw_bytes = os.path.getsize(imaj_yolu)
+
+            if compress:
+                self.log.emit("[i] İmaj gzip ile sıkıştırılıyor (bu biraz sürebilir)...", "info")
+                onceki_yol = imaj_yolu
+                imaj_yolu = compress_image(imaj_yolu, remove_original=True)
+                compressed_bytes = os.path.getsize(imaj_yolu)
+                coc.log_event(
+                    coc.EVENT_IMAGE_COMPRESSED,
+                    f"İmaj sıkıştırıldı: {onceki_yol} -> {imaj_yolu} "
+                    f"({raw_bytes} -> {compressed_bytes} bayt)",
+                )
+                self.log.emit(
+                    f"[+] Sıkıştırma tamamlandı: {raw_bytes / (1024**2):.1f} MB -> "
+                    f"{compressed_bytes / (1024**2):.1f} MB",
+                    "ok",
+                )
+
             self.status.emit("İmaj alma tamamlandı.")
             self.progress.emit(100)
 
@@ -443,14 +520,21 @@ class AcquisitionWorker(QThread):
                 report.finish(
                     status="success" if not sonuc.get("failed_blocks") else "partial",
                     output_path=imaj_yolu, image_hash=master_hash,
-                    total_bytes=os.path.getsize(imaj_yolu), chunk_size_bytes=bs * 1024 * 1024,
+                    total_bytes=raw_bytes, chunk_size_bytes=bs * 1024 * 1024,
                     chunk_count=len(sonuc.get("acquired_blocks", [])),
                     failed_items=[str(b) for b in sonuc.get("failed_blocks", [])],
                 )
                 rapor_yolu = self._save_report(report, os.path.dirname(imaj_yolu) or ".")
                 self.report_ready.emit(report, rapor_yolu)
 
-            self.ask_verify.emit(imaj_yolu)
+            if compress:
+                self.log.emit(
+                    "[i] İmaj sıkıştırıldığı için otomatik doğrulama atlandı -- "
+                    "gerekirse verify_report.py ile bağımsız doğrulayabilirsiniz.",
+                    "info",
+                )
+            else:
+                self.ask_verify.emit(imaj_yolu)
 
         except Exception as exc:
             self.log.emit(f"[HATA] Beklenmeyen hata: {exc}", None)
@@ -472,9 +556,15 @@ class AcquisitionWorker(QThread):
         disk_number, out_path, mode, block_size_mb = (
             c["disk_number"], c["out_path"], c["mode"], c["block_size_mb"],
         )
+        compress = c.get("compress", False)
+        try:
+            disk_description = get_disk_description_windows(self.ssh, disk_number)
+        except Exception:
+            disk_description = ""
         report = self._new_report(
             engine="ssh_engine", method="disk", target_os="windows",
             target_host=c["host"], source_identifier=f"PhysicalDrive{disk_number}", acquisition_type=mode,
+            source_description=disk_description,
         )
         try:
             apply_wb = (mode == "offline")
@@ -554,6 +644,24 @@ class AcquisitionWorker(QThread):
             self.log.emit(f"[BAŞARILI] İmaj birleştirildi: {imaj_yolu}", None)
             master_hash = local_master_hash(imaj_yolu)
             self.log.emit(f"[+] Yerel master SHA-256: {master_hash}", "info")
+            raw_bytes = os.path.getsize(imaj_yolu)
+
+            if compress:
+                self.log.emit("[i] İmaj gzip ile sıkıştırılıyor (bu biraz sürebilir)...", "info")
+                onceki_yol = imaj_yolu
+                imaj_yolu = compress_image(imaj_yolu, remove_original=True)
+                compressed_bytes = os.path.getsize(imaj_yolu)
+                coc.log_event(
+                    coc.EVENT_IMAGE_COMPRESSED,
+                    f"İmaj sıkıştırıldı: {onceki_yol} -> {imaj_yolu} "
+                    f"({raw_bytes} -> {compressed_bytes} bayt)",
+                )
+                self.log.emit(
+                    f"[+] Sıkıştırma tamamlandı: {raw_bytes / (1024**2):.1f} MB -> "
+                    f"{compressed_bytes / (1024**2):.1f} MB",
+                    "ok",
+                )
+
             self.status.emit("İmaj alma tamamlandı.")
             self.progress.emit(100)
 
@@ -562,14 +670,21 @@ class AcquisitionWorker(QThread):
                 report.finish(
                     status="success" if not sonuc.get("failed_blocks") else "partial",
                     output_path=imaj_yolu, image_hash=master_hash,
-                    total_bytes=os.path.getsize(imaj_yolu), chunk_size_bytes=bs * 1024 * 1024,
+                    total_bytes=raw_bytes, chunk_size_bytes=bs * 1024 * 1024,
                     chunk_count=len(sonuc.get("acquired_blocks", [])),
                     failed_items=[str(b) for b in sonuc.get("failed_blocks", [])],
                 )
                 rapor_yolu = self._save_report(report, os.path.dirname(imaj_yolu) or ".")
                 self.report_ready.emit(report, rapor_yolu)
 
-            self.ask_verify.emit(imaj_yolu)
+            if compress:
+                self.log.emit(
+                    "[i] İmaj sıkıştırıldığı için otomatik doğrulama atlandı -- "
+                    "gerekirse verify_report.py ile bağımsız doğrulayabilirsiniz.",
+                    "info",
+                )
+            else:
+                self.ask_verify.emit(imaj_yolu)
 
         except Exception as exc:
             self.log.emit(f"[HATA] Beklenmeyen hata: {exc}", None)
@@ -935,6 +1050,13 @@ class ForensicWidget(QWidget):
         row2.addWidget(self.entry_pass)
         conn.body.addLayout(row2)
 
+        self._recent_hosts = _load_recent_hosts()
+        if self._recent_hosts:
+            completer = QCompleter([e["host"] for e in self._recent_hosts], self.entry_host)
+            completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+            self.entry_host.setCompleter(completer)
+            completer.activated[str].connect(self._on_recent_host_picked)
+
         row3 = QHBoxLayout()
         row3.addWidget(QLabel("SSH Anahtar:"))
         self.entry_key = widgets.MonoInput()
@@ -1060,6 +1182,18 @@ class ForensicWidget(QWidget):
         disk_row3.addWidget(self.combo_block_size)
         disk_row3.addStretch()
         self.disk_card.body.addLayout(disk_row3)
+
+        # Sadece Offline Acquisition icin anlamli -- Live modda parcalar
+        # resume ihtimaline karsi zaten korunuyor (concatenate_blocks
+        # cleanup=False), sikistirma o senaryoda ekstra bir adim/risk
+        # olurdu. Mod degisince _on_mode_change ile devre disi/acik yapilir.
+        self.check_compress = widgets.Checkbox("Sıkıştır (gzip) -- disk alanından tasarruf sağlar")
+        self.check_compress.setEnabled(False)
+        self.disk_card.body.addWidget(self.check_compress)
+
+        for r in (self.radio_live, self.radio_offline):
+            r.toggled.connect(self._on_mode_change)
+
         body.addWidget(self.disk_card)
 
         # === Hedef Dosya/Klasor ===
@@ -1077,7 +1211,7 @@ class ForensicWidget(QWidget):
         file_row2 = QHBoxLayout()
         file_row2.addWidget(QLabel("Çıktı Klasörü:"))
         self.entry_file_out = widgets.MonoInput()
-        self.entry_file_out.setText(os.path.join(PROJECT_ROOT, "images", "dosyalar"))
+        self.entry_file_out.setText(os.path.join(_PERSISTENT_ROOT, "images", "dosyalar"))
         file_row2.addWidget(self.entry_file_out, stretch=1)
         browse_file_out_btn = widgets.SecondaryButton("Gözat")
         browse_file_out_btn.clicked.connect(self._browse_file_out)
@@ -1268,7 +1402,7 @@ class ForensicWidget(QWidget):
     def _load_or_create_operator_key(self):
         """AYNEN tasindi (gui_v2.py) -- keys/operator_tor_key.json'dan yukler/uretir."""
         import json
-        key_path = os.path.join(PROJECT_ROOT, "keys", "operator_tor_key.json")
+        key_path = os.path.join(_PERSISTENT_ROOT, "keys", "operator_tor_key.json")
         if os.path.exists(key_path):
             try:
                 with open(key_path, "r", encoding="utf-8") as f:
@@ -1350,6 +1484,12 @@ class ForensicWidget(QWidget):
         else:
             self.lbl_disk_path.setText("Disk (örn. /dev/sdb):")
             self.lbl_remote_path.setText("Uzak Yol (örn. /home/user/belgeler):")
+
+    def _on_mode_change(self, *_args):
+        offline = self.radio_offline.isChecked()
+        self.check_compress.setEnabled(offline)
+        if not offline:
+            self.check_compress.setChecked(False)
 
     def _on_acq_type_change(self, *_args):
         if self.radio_acq_disk.isChecked():
@@ -1512,6 +1652,18 @@ class ForensicWidget(QWidget):
         self.connect_worker.finished.connect(self._on_connect_finished)
         self.connect_worker.start()
 
+    def _on_recent_host_picked(self, host):
+        """Host alaninda tamamlanan onerilerden biri secilince, o hostla
+        birlikte kaydedilmis port/kullanici adini da otomatik doldurur --
+        boylece sadece host degil, tum baglanti bilgisi tek tikla geri gelir."""
+        for entry in self._recent_hosts:
+            if entry.get("host") == host:
+                if entry.get("port"):
+                    self.entry_port.setText(entry["port"])
+                if entry.get("username"):
+                    self.entry_user.setText(entry["username"])
+                break
+
     def _on_connect_finished(self):
         self.btn_connect.setEnabled(True)
         self.btn_connect.setText("Bağlan ve Diskleri Listele")
@@ -1528,6 +1680,8 @@ class ForensicWidget(QWidget):
         host = self.entry_host.text().strip()
         port = self.entry_port.text().strip()
         self._log(f"[BAŞARILI] Bağlantı kuruldu: {host}:{port}", "ok")
+        # Sadece host/port/kullanici adi -- sifre asla saklanmaz.
+        _save_recent_host(host, port, self.entry_user.text().strip())
         if via_tor:
             coc.log_event(coc.EVENT_TOR_CONNECTION_ESTABLISHED, f"Bağlantı Tor Hidden Service üzerinden kuruldu: {host}")
             self._log("[i] Bağlantı Tor üzerinden kuruldu (delil zinciri logunda işaretlendi).", "info")
@@ -1579,8 +1733,9 @@ class ForensicWidget(QWidget):
             self._show_error("İmaj çıktı yolu seçin.")
             return
 
+        compress = mode == "offline" and self.check_compress.isChecked()
         ctx = self._new_report_ctx()
-        ctx.update(disk_number=disk_number, out_path=out_path, mode=mode, block_size_mb=self._get_block_size_mb())
+        ctx.update(disk_number=disk_number, out_path=out_path, mode=mode, block_size_mb=self._get_block_size_mb(), compress=compress)
         self._begin_acquisition("windows_disk", ctx, f"MOD: {mode.upper()} | DISK: PhysicalDrive{disk_number} | ÇIKTI: {out_path}")
 
     def _start_disk_linux(self):
@@ -1602,8 +1757,9 @@ class ForensicWidget(QWidget):
             if not self._show_yesno_dialog("Disk listede yok", f"'{disk_name}' listelenen disklerde görünmüyor.\nYine de devam edilsin mi?"):
                 return
 
+        compress = mode == "offline" and self.check_compress.isChecked()
         ctx = self._new_report_ctx()
-        ctx.update(disk=disk, out_path=out_path, mode=mode, password=password, block_size_mb=self._get_block_size_mb())
+        ctx.update(disk=disk, out_path=out_path, mode=mode, password=password, block_size_mb=self._get_block_size_mb(), compress=compress)
         self._begin_acquisition("linux_disk", ctx, f"MOD: {mode.upper()} | DISK: {disk} | ÇIKTI: {out_path}")
 
     def _start_file(self):

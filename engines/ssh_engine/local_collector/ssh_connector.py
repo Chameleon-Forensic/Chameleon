@@ -1,6 +1,7 @@
 import contextlib
 import getpass
 import os
+import sys
 import threading
 import paramiko
 
@@ -30,7 +31,15 @@ _TOFU_SAVE_LOCK = threading.Lock()
 # istemcisinin guvenini de sessizce kullanmasin diye ayri tutuldu).
 # keys/operator_tor_key.json ile AYNI dizin/desen (bkz. gui_v2.py,
 # .gitignore'daki **/ssh_engine/keys/ zaten bunu da kapsiyor).
-_ENGINE_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+#
+# Derlenmis (.exe) modda __file__ yerine sys.executable'a gore hesaplanir --
+# aksi halde TOFU ile ogrenilen anahtarlar PyInstaller'in her calistirmada
+# silinen gecici _MEIPASS klasorune yazilir ve bir SONRAKI calistirmada hic
+# hatirlanmaz (chain_of_custody.LOG_DIR ile ayni gerekce, bkz. docs/roadmap.md).
+if getattr(sys, "frozen", False):
+    _ENGINE_ROOT = os.path.dirname(os.path.abspath(sys.executable))
+else:
+    _ENGINE_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CHAMELEON_KNOWN_HOSTS = os.path.join(_ENGINE_ROOT, "keys", "chameleon_known_hosts")
 
 
@@ -75,7 +84,7 @@ class _StrictPolicy(paramiko.RejectPolicy):
 class SSHConnector:
     def __init__(self, host, port=22, username=None, password=None,
                  key_path=None, known_hosts_path=None, strict=True,
-                 socks_proxy_port=None):
+                 socks_proxy_port=None, connect_timeout=10):
         self.host = host
         self.port = port
         self.username = username
@@ -83,6 +92,12 @@ class SSHConnector:
         self.key_path = key_path
         self.known_hosts_path = known_hosts_path or CHAMELEON_KNOWN_HOSTS
         self.strict = strict
+        # Varsayilan 10sn cogu durumda yeterli, ama Tor gibi yuksek
+        # gecikmeli baglantilarda erken zaman asimina yol acabilir --
+        # ihtiyaç halinde caginin bunu artirabilmesi icin parametre olarak
+        # disariya acildi (GUI'ye simdilik yansitilmadi, sadece kod
+        # seviyesinde -- gereksiz bir "gelismis ayarlar" paneli eklemeden).
+        self.connect_timeout = connect_timeout
         self.client = None
         # connect() basarili olup strict=False ise, sunucunun kimliginin bu
         # baglantida ILK KEZ mi ogrenildigi ("learned") yoksa CHAMELEON_KNOWN_HOSTS'ta
@@ -208,7 +223,7 @@ class SSHConnector:
             "hostname": self.host,
             "port": self.port,
             "username": self.username,
-            "timeout": 10,
+            "timeout": self.connect_timeout,
             "look_for_keys": True,
             "allow_agent": True,
         }
@@ -315,8 +330,13 @@ class SSHConnector:
     execute_command = run_command
 
     def list_disks(self):
-        """Uzak Linux sistemindeki diskleri listeler."""
-        command = "lsblk -o NAME,SIZE,TYPE,FSTYPE,MOUNTPOINT"
+        """
+        Uzak Linux sistemindeki diskleri listeler. MODEL,SERIAL kolonlari,
+        rapora yazilan kaynak tanimini path yerine (orn. /dev/sdb yerine
+        gercek disk modeli/seri no) desteklemek icin eklendi -- ISO/IEC
+        27037'nin istedigi "delilin benzersiz tanimlanmasi" gereksinimi.
+        """
+        command = "lsblk -o NAME,SIZE,TYPE,FSTYPE,MOUNTPOINT,MODEL,SERIAL"
         output, _error, _exit_status = self.run_command(command)
         return output
 

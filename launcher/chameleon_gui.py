@@ -9,6 +9,7 @@ customtkinter surumunden PySide6'ya tam gecis tamamlandi (bkz.
 docs/roadmap.md, docs/oturum_ozeti.md) -- eski dosyalar kaldirildi.
 """
 
+import csv
 import os
 import sys
 from datetime import datetime
@@ -16,9 +17,9 @@ from datetime import datetime
 from PySide6.QtCore import Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QColor, QIcon, QPixmap
 from PySide6.QtWidgets import (
-    QApplication, QButtonGroup, QFrame, QHBoxLayout, QLabel, QMainWindow,
-    QPushButton, QScrollArea, QSizePolicy, QSplashScreen, QStackedWidget,
-    QVBoxLayout, QWidget,
+    QApplication, QButtonGroup, QFileDialog, QFrame, QHBoxLayout, QLabel,
+    QMainWindow, QPushButton, QScrollArea, QSizePolicy, QSplashScreen,
+    QStackedWidget, QVBoxLayout, QWidget,
 )
 
 if getattr(sys, "frozen", False):
@@ -808,6 +809,7 @@ class ChameleonWindow(QMainWindow):
             ("vpn", "shield", "VPN", self._show_vpn_detail),
             ("tor", "shield-alert", "Tor (Acil Durum)" if lang == "tr" else "Tor (Emergency)", self._show_tor_detail),
             ("ram", "cpu", "RAM İmajı Al" if lang == "tr" else "RAM Image", self._show_ram_detail),
+            ("history", "clock", "Vaka Geçmişi" if lang == "tr" else "Case History", self._show_case_history),
             ("help", "info", "Bilgi Merkezi" if lang == "tr" else "Help Center", self._show_help),
             ("settings", "settings", "Ayarlar" if lang == "tr" else "Settings", self._show_settings),
         ]
@@ -837,6 +839,13 @@ class ChameleonWindow(QMainWindow):
             item = self.stack_layout.takeAt(0)
             w = item.widget()
             if w:
+                # deleteLater() asenkron -- hemen ardindan silinecek widget
+                # bir sonraki olay dongusune kadar hala "var" sayilir (bkz.
+                # ayni sinif Bilgi Merkezi bug'i, docs/hatalar_ve_sonuclar.md).
+                # hide() ile gorunmez/erisilemez yapmak, silinme gerceklesene
+                # kadarki bu araliktaki yan etkileri (findChildren'da eski
+                # sayfanin gorunmesi, vs.) onluyor.
+                w.hide()
                 w.deleteLater()
         page = QWidget()
         self.stack_layout.addWidget(page)
@@ -1215,6 +1224,130 @@ class ChameleonWindow(QMainWindow):
 
         body.addWidget(BodyText(f"Chameleon v{version.VERSION}"))
         body.addStretch()
+
+    # -- Vaka Gecmisi -----------------------------------------------------
+    def _show_case_history(self):
+        """
+        forensic_report.read_history()'nin okudugu shared/data/case_history.json
+        listesini gosterir -- her motor/oturumdan alinan tum imajlarin ozeti.
+        Bu dosyaya HER rapor kaydedildiginde zaten yaziliyordu (bkz.
+        ForensicReport._append_to_history), sadece bunu gosteren bir sayfa
+        eksikti (bkz. docs/hatalar_ve_sonuclar.md).
+        """
+        self._set_active_nav("history")
+        page = self._clear_content()
+        body = self._scrollable(page)
+        lang = self.lang
+
+        header = QHBoxLayout()
+        title = QLabel("Vaka Geçmişi" if lang == "tr" else "Case History")
+        title.setStyleSheet(f"color:{ui.TEXT_MAIN}; font-family:'{ui.FONT_UI}'; font-size:18px; font-weight:600;")
+        header.addWidget(title)
+        header.addStretch()
+
+        if SSH_ENGINE_DIR not in sys.path:
+            sys.path.insert(0, SSH_ENGINE_DIR)
+        try:
+            import forensic_report
+        except ImportError as exc:
+            body.addLayout(header)
+            body.addWidget(BodyText(f"Vaka geçmişi yüklenemedi: {exc}" if lang == "tr" else f"Could not load case history: {exc}"))
+            body.addStretch()
+            return
+
+        entries = forensic_report.read_history()
+
+        export_btn = widgets.SecondaryButton("CSV Olarak Dışa Aktar" if lang == "tr" else "Export as CSV")
+        export_btn.setEnabled(bool(entries))
+        export_btn.clicked.connect(lambda: self._export_case_history_csv(entries))
+        header.addWidget(export_btn)
+        body.addLayout(header)
+
+        self._history_status = BodyText("")
+        body.addWidget(self._history_status)
+
+        if not entries:
+            body.addWidget(BodyText(
+                "Henüz kayıtlı bir vaka yok -- bir imaj alma işlemi tamamlandığında burada görünecek."
+                if lang == "tr" else
+                "No cases recorded yet -- one will appear here once an acquisition completes."
+            ))
+            body.addStretch()
+            return
+
+        status_renk = {"success": ui.SUCCESS, "partial": ui.WARNING, "failed": ui.ERROR}
+        engine_adi = {"ssh_engine": "SSH Motoru" if lang == "tr" else "SSH Engine",
+                      "ram_engine": "RAM Motoru" if lang == "tr" else "RAM Engine"}
+
+        for entry in entries:
+            baslik = entry.get("case_id") or ("Vaka No Girilmedi" if lang == "tr" else "No Case ID")
+            card = widgets.Card(baslik)
+            satirlar = [
+                ("Motor" if lang == "tr" else "Engine", engine_adi.get(entry.get("engine"), entry.get("engine") or "—")),
+                ("Hedef" if lang == "tr" else "Target", entry.get("target_host") or entry.get("source_identifier") or "—"),
+                ("İnceleyen" if lang == "tr" else "Examiner", entry.get("examiner") or "—"),
+                ("Yetkili Kişi" if lang == "tr" else "Custodian", entry.get("custodian") or "—"),
+                ("Tarih" if lang == "tr" else "Date", entry.get("start_time_utc") or "—"),
+            ]
+            for etiket, deger in satirlar:
+                row = QHBoxLayout()
+                lbl = QLabel(f"{etiket}:")
+                lbl.setFixedWidth(120)
+                lbl.setStyleSheet(f"color:{ui.TEXT_SECONDARY}; font-family:'{ui.FONT_UI}'; font-size:{ui.SIZE_HELPER}px;")
+                row.addWidget(lbl)
+                val = QLabel(str(deger))
+                val.setWordWrap(True)
+                val.setStyleSheet(f"color:{ui.TEXT_MAIN}; font-family:'{ui.FONT_UI}'; font-size:{ui.SIZE_HELPER}px;")
+                row.addWidget(val, stretch=1)
+                card.body.addLayout(row)
+
+            footer = QHBoxLayout()
+            durum = entry.get("status") or "—"
+            durum_lbl = QLabel(durum)
+            durum_lbl.setStyleSheet(
+                f"color:{status_renk.get(durum, ui.TEXT_SECONDARY)}; font-family:'{ui.FONT_UI}'; "
+                f"font-size:{ui.SIZE_HELPER}px; font-weight:600;"
+            )
+            footer.addWidget(durum_lbl)
+            footer.addStretch()
+
+            html_path = entry.get("html_path")
+            if html_path and os.path.isfile(html_path):
+                open_btn = widgets.SecondaryButton("Raporu Aç" if lang == "tr" else "Open Report")
+                open_btn.clicked.connect(lambda _checked=False, p=html_path: os.startfile(p))
+                footer.addWidget(open_btn)
+            card.body.addLayout(footer)
+
+            body.addWidget(card)
+
+        body.addStretch()
+
+    def _export_case_history_csv(self, entries):
+        lang = self.lang
+        default_name = "vaka_gecmisi.csv" if lang == "tr" else "case_history.csv"
+        path, _ = QFileDialog.getSaveFileName(
+            self, "CSV Olarak Kaydet" if lang == "tr" else "Save as CSV",
+            default_name, "CSV (*.csv)",
+        )
+        if not path:
+            return
+
+        columns = [
+            "case_id", "examiner", "custodian", "engine", "method", "target_os",
+            "target_host", "source_identifier", "connection_method", "status",
+            "start_time_utc", "end_time_utc", "report_path",
+        ]
+        try:
+            with open(path, "w", newline="", encoding="utf-8-sig") as f:
+                writer = csv.DictWriter(f, fieldnames=columns, extrasaction="ignore")
+                writer.writeheader()
+                for entry in entries:
+                    writer.writerow(entry)
+        except OSError as exc:
+            self._history_status.setText(f"CSV yazılamadı: {exc}" if lang == "tr" else f"Could not write CSV: {exc}")
+            return
+
+        self._history_status.setText(f"CSV kaydedildi: {path}" if lang == "tr" else f"CSV saved: {path}")
 
     # -- SSH / RAM motoruna gecis (henuz Qt'ye tasinmadi) ------------------
     def _open_ssh_engine(self, connection_method, case):

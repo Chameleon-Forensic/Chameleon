@@ -86,6 +86,7 @@ Not: Bu projeye başka bir ekiple (BitGuard) birleşme denendi, anlaşamayıp ip
 | Tek dosya/klasör alma (find + sha256sum + cat, write-blocker'sız) | `engines/ssh_engine/local_collector/file_acquirer.py` |
 | Windows hedef (SSH+PowerShell, Base64 transfer) disk + dosya/klasör | `engines/ssh_engine/local_collector/windows_acquirer.py` |
 | SHA-256 hesaplama/karşılaştırma (chunk + dosya bazlı) | `engines/ssh_engine/local_collector/hash_verifier.py` |
+| Bağımsız rapor/imaj doğrulama (GUI'siz, tek başına CLI) | `engines/ssh_engine/local_collector/verify_report.py` |
 | write-blocker (`blockdev --setro`) çağrısı | `engines/ssh_engine/local_collector/write_block_helper.py` |
 | Chain-of-custody log yazımı + okuma (`read_events`) | `engines/ssh_engine/local_collector/chain_of_custody.py` |
 | Ortak adli rapor şeması (`ForensicReport`, tüm motorlar kullanır) | `shared/forensic_report.py` |

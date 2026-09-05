@@ -396,6 +396,126 @@ ekran görüntüsüyle iki butonun da taşmadan doğru göründüğü doğruland
 
 ---
 
+## Rapordaki TOOL_VERSION, gerçek uygulama sürümünden bağımsız, sabit "1.0" yazıyordu
+
+**Belirti:** `report.json`'un `tool.version` alanı her zaman `"1.0"`
+gösteriyordu — uygulamanın gerçek sürümü (`shared/version.py` ->
+`VERSION = "0.1.0"`) çoktan değişmiş olsa bile.
+
+**Kök neden:** `forensic_report.py`'de `TOOL_VERSION = "1.0"` ayrı,
+sabit bir string olarak tanımlanmıştı; `shared/version.py`'deki tek,
+ortak sürüm numarasından hiç okunmuyordu.
+
+**Çözüm:** `TOOL_VERSION`, `from version import VERSION as TOOL_VERSION`
+ile `shared/version.py`'den okunacak şekilde değiştirildi. Artık tek bir
+yerden (`version.py`) yönetilen sürüm, launcher/splash ekranıyla rapor
+arasında tutarlı.
+
+**Sonuç:** `forensic_report.ForensicReport().to_dict()["tool"]["version"]`
+`"0.1.0"` döndüğü doğrulandı.
+
+---
+
+## "Vaka Geçmişi" sidebar sayfası — doküman "yapıldı" diyor, kodda yok
+
+**Belirti:** Vaka Geçmişi listesine bir CSV dışa aktarma butonu eklenmek
+istenirken, `launcher/chameleon_gui.py`'de "Vaka Geçmişi" diye bir
+sidebar sekmesi/sayfası ARANDI ve BULUNAMADI (`grep -i history/gecmi`
+sıfır sonuç verdi; sidebar `nav_items` listesi sadece Ana Sayfa /
+Doğrudan / VPN / Tor / RAM / Bilgi Merkezi / Ayarlar içeriyor).
+
+**Kök neden (kesin değil, en olası açıklama):** `docs/roadmap.md`'de bu
+sayfa "Yapıldı" olarak, ekran görüntüsüyle doğrulanmış şekilde
+kayıtlıydı — yani BİR ZAMANLAR gerçekten vardı. Muhtemel açıklama: daha
+sonraki bir "Yapıldı" maddesi olan **`customtkinter` → PySide6 tam
+geçişi**, launcher'ın tüm kabuğunu (sidebar dahil) sıfırdan yeniden
+kurdu; bu geçiş sırasında Vaka Geçmişi sayfası yeniden inşa edilmeyi
+unutulmuş olmalı. Backend (`forensic_report.py`'deki
+`shared/data/case_history.json` + `read_history()`) hiç bozulmadı, her
+rapor kaydında hâlâ güncelleniyor — sadece onu gösteren UI kayboldu.
+
+**Çözüm:** Şimdilik düzeltilmedi — kapsam dışı, büyük bir sayfa yeniden
+inşası gerektiriyor (bkz. `docs/roadmap.md` "Sırada" madde 1). Bunun
+yerine roadmap.md'deki yanlış "Yapıldı" iddiası düzeltildi ve doğru not
+eklendi.
+
+**Ders:** Bir "Yapıldı" maddesinin ekran görüntüsüyle doğrulanmış olması,
+SONRAKİ bir büyük refactor'dan (özellikle "kabuğu sıfırdan kur" türünden)
+sağ çıktığının garantisi değil — böyle bir refactor sonrası eski
+"Yapıldı" listesinin kritik UI sayfaları için hızlı bir gözden geçirmesi
+faydalı olurdu.
+
+---
+
+## `_clear_content()` içinde `deleteLater()` asenkronluğu, hızlı ardışık sayfa geçişlerinde eski widget'ları "canlı" bırakıyordu
+
+**Belirti:** Yeni eklenen "Vaka Geçmişi" sayfası headless testte iki kez
+art arda çağrılınca (`_show_case_history()` → `_show_case_history()`),
+`findChildren()` önceki çağrının "CSV Olarak Dışa Aktar" butonunu da
+döndürdü -- sanki iki buton varmış gibi. Gerçek kullanımda (bir kullanıcı
+sidebar'da tek tek tıkladığında) fark edilmez çünkü tıklamalar arasında
+Qt olay döngüsünün nefes alacak zamanı olur, ama teorik olarak HER
+sayfa geçişinde (`_clear_content()` sadece bu sayfaya özel değil, TÜM
+launcher sayfaları bunu kullanıyor) aynı sınıf bir yarış durumu var.
+
+**Kök neden:** `_clear_content()`, eski sayfanın widget'ını
+`deleteLater()` ile siliyordu. `deleteLater()` ASENKRON'dur -- widget,
+bir sonraki olay döngüsü turuna kadar hâlâ geçerli, sorgulanabilir bir
+QObject olarak kalır. Bu, projede DAHA ÖNCE Bilgi Merkezi'nde bulunan
+AYNI hata sınıfı (bkz. yukarıdaki "Bilgi Merkezi kaydırma düzeltmesi..."
+maddesindeki not) — ama o zamanki düzeltme sadece o tek ekrana
+uygulanmıştı, kaynak fonksiyon (`_clear_content()`) düzeltilmemişti.
+
+**Çözüm:** `_clear_content()`'e `w.hide()` eklendi, `w.deleteLater()`'dan
+hemen önce -- artık widget mantıksal olarak da (`isVisible()` üzerinden)
+anında "yok" sayılıyor, silinme gerçekleşene kadarki aralıkta hiçbir yan
+etki kalmıyor. Bu, TÜM launcher sayfa geçişlerini kapsayan genel bir
+düzeltme (sadece Vaka Geçmişi'ni değil).
+
+**Sonuç:** Aynı sayfa art arda (event loop'a hiç dönmeden) defalarca
+çağrılıp `isVisible()` filtresiyle widget sayımı yapıldı, artık her
+zaman doğru (tek) sonuç veriyor.
+
+---
+
+## `Chameleon.exe` derlenmiş modda beş farklı yazılabilir yolu geçici `_MEIPASS` klasörüne yazıyordu
+
+**Belirti:** Roadmap'te "portable yapma" görevi sadece `chain_of_custody.
+LOG_DIR` ve `forensic_report.HISTORY_DIR`'ı adlandırıyordu; bunları
+düzeltirken aynı `__file__`-bağımlı desenin ayrıca `image_acquirer.
+IMAGE_DIR`/`MANIFEST_DIR`, `ssh_connector.CHAMELEON_KNOWN_HOSTS` (TOFU
+öğrenilen sunucu kimlikleri) ve `gui_v2.py`'deki operatör Tor anahtarı
+yolu + varsayılan çıktı yolları + son bağlantılar dosyasında da AYNEN
+tekrarlandığı bulundu.
+
+**Kök neden:** Hepsi `os.path.dirname(os.path.abspath(__file__))` (ya da
+ondan türetilen bir yol) kullanıyordu. Kaynaktan çalışırken bu doğru
+sonucu verir, ama derlenmiş `.exe`'de PyInstaller'ın veri-dosyası olarak
+paketlediği modüllerin (bu proje `sys.path.insert()+import` deseniyle
+çalıştığı için `gui_v2.py`/`chain_of_custody.py` gibi dosyalar birer
+veri dosyası olarak paketleniyor) `__file__`'ı, her çalıştırmada silinen
+GEÇİCİ `_MEIPASS` klasörünü gösterir -- salt-okunur, PAKETLENMİŞ
+kaynaklar (ikonlar, fontlar, gömülü `tor.exe`) için bu DOĞRU davranış,
+ama YAZILABİLİR/kalıcı olması gereken veriler için yanlış.
+
+**Çözüm:** Her dosyada `getattr(sys, "frozen", False)` kontrolü eklendi;
+derlenmiş modda `sys.executable`'ın (exe'nin kendi, KALICI konumu)
+dizini kullanılıyor, kaynaktan çalışırken eski `__file__`-bağımlı
+hesaplama hiç değişmeden korunuyor. Salt-okunur paketlenmiş kaynakların
+(`shared/ui_kit`, `shared/tor_binary.py`, `RamImagerCLI.exe` vb.)
+yolları BİLİNÇLİ olarak dokunulmadı -- onlar zaten `_MEIPASS`'ta olması
+gereken yerdeler.
+
+**Sonuç:** `sys.frozen`/`sys.executable` sahte bir `.exe` yoluna
+ayarlanarak (gerçek bir derleme yapmadan) her 4 modül + `gui_v2.py`
+yeniden import edildi, tüm yolların beklenen kalıcı konuma (`sys.
+executable`'ın dizini + `logs`/`images`/`keys`/`data`) çözüldüğü
+doğrulandı; kaynaktan çalışırken (`sys.frozen` yok) hiçbir yolun
+DEĞİŞMEDİĞİ ayrıca regresyonla teyit edildi. Detaylar
+[roadmap.md](roadmap.md)'de.
+
+---
+
 ## Operasyonel notlar (hata değil, tekrar karşılaşılabilecek sürtünmeler)
 
 - **Git Bash'te `tar` ile Windows sürücü harfi (`C:\...`) sorunu**: `tar`,

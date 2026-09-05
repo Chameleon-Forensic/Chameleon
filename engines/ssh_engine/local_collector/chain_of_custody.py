@@ -5,10 +5,21 @@ işlemleri bu modül üzerinden logs/case_<tarih-saat>.log dosyasına yazar.
 """
 
 import os
+import sys
 from datetime import datetime, timezone
 
 # --- Sabitler ---
-LOG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "logs")
+# Derlenmis (.exe) modda __file__'in bulundugu yer PyInstaller'in her
+# calistirmada silinen GECICI _MEIPASS klasorudur -- loglar buraya
+# yazilirsa uygulama kapaninca kaybolur, USB'den farkli bir bilgisayarda
+# calistirilinca hicbir gecmis kalmaz. sys.executable (.exe'nin KENDI
+# konumu) ise KALICIDIR. Kaynaktan calisirken (sys.frozen yok) mevcut
+# davranis (bkz. docs/roadmap.md "Sirada" -- portable yapma maddesi)
+# hic degismez.
+if getattr(sys, "frozen", False):
+    LOG_DIR = os.path.join(os.path.dirname(os.path.abspath(sys.executable)), "logs")
+else:
+    LOG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "logs")
 
 # İşlem türleri (madde 6'da belirtilen sabit olay isimleri)
 EVENT_EXAM_START = "EXAM_START"
@@ -41,6 +52,11 @@ EVENT_DIRECTORY_LISTED = "DIRECTORY_LISTED"
 # genelde olmadigi icin bu secenek var, ama delil zincirinde ortadaki adam
 # saldirisina karsi bu korumanin aktif OLMADIGI acikca kayit altina alinmali.
 EVENT_HOST_KEY_VERIFICATION_SKIPPED = "HOST_KEY_VERIFICATION_SKIPPED"
+# Tamamlanmis imaj gzip ile sikistirildi (sadece Offline Acquisition,
+# kullanici tercihi) -- raporun image_hash'i HAM (sikistirilmamis) icerige
+# ait kalir, output_path ise artik .gz dosyasini gosterir; bu olay bu
+# donusumun ne zaman/ne oranda oldugunu delil zincirinde acikca kaydeder.
+EVENT_IMAGE_COMPRESSED = "IMAGE_COMPRESSED"
 
 # Bu çalıştırmaya ait log dosyasının yolu (ilk log_event çağrısında oluşur)
 _current_log_file = None

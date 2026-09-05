@@ -20,9 +20,13 @@ dosyasina islenir.
 """
 
 import getpass
+import gzip
 import json
 import os
+import re
 import shlex
+import shutil
+import sys
 import time
 from datetime import datetime, timezone
 
@@ -44,14 +48,23 @@ BLOCK_SIZE_MB = CHUNK_SIZE // (1024 * 1024)  # hash_verifier ile birebir ayni (4
 # C:\Windows\System32) baslatilirsa oraya yazmaya calisip "Permission
 # denied" hatasi verir (bkz. remote_agent/write_blocker.sh'daki ayni
 # sinif hata icin uygulanan SCRIPT_DIR cozumu).
-IMAGE_DIR = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "images"
-)
-MAX_RETRY_PER_BLOCK = 3
+#
+# Derlenmis (.exe) modda bu, __file__ yerine sys.executable'a gore
+# hesaplanir -- aksi halde PyInstaller'in gecici _MEIPASS klasorune
+# duser (chain_of_custody.LOG_DIR ile ayni gerekce, bkz. docs/roadmap.md).
+if getattr(sys, "frozen", False):
+    _PERSISTENT_ROOT = os.path.dirname(os.path.abspath(sys.executable))
+    IMAGE_DIR = os.path.join(_PERSISTENT_ROOT, "images")
+    MANIFEST_DIR = os.path.join(_PERSISTENT_ROOT, "logs")
+else:
+    IMAGE_DIR = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "images"
+    )
+    # manifest_<tarih-saat>.json dosyalari, chain_of_custody.py'nin log/
+    # klasoruyle ayni yerde tutulur (docs/PROJE_TALIMATI.md madde 6).
+    MANIFEST_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "logs")
 
-# manifest_<tarih-saat>.json dosyalari, chain_of_custody.py'nin log/
-# klasoruyle ayni yerde tutulur (docs/PROJE_TALIMATI.md madde 6).
-MANIFEST_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "logs")
+MAX_RETRY_PER_BLOCK = 3
 
 
 def _new_manifest_path():
@@ -145,6 +158,39 @@ def get_disk_size_bytes(ssh, disk_path, password=None):
         return int(output.strip())
     except (ValueError, AttributeError):
         return None
+
+
+def get_disk_description(ssh, disk_path):
+    """
+    Diskin model/seri numarasini alir -- rapora sadece /dev/sdb gibi bir
+    yol degil, diskin gercek/benzersiz kimligini de yazabilmek icin
+    (ISO/IEC 27037'nin istedigi "delilin benzersiz tanimlanmasi"
+    gereksinimi -- ayni yol farkli zamanlarda farkli fiziksel diske
+    karsilik gelebilir, seri no ise degismez).
+
+    -P (key="value") formati kullanilir: duz kolon ciktisinda MODEL
+    alani bosluk icerebilir (orn. "Virtual Disk"), bu da kolonlarin
+    yanlis hizalanmasina/parcalanmasina yol acar. -P bu riski ortadan
+    kaldirir. Okunamazsa (ornegin cok eski bir util-linux surumu -P'yi
+    desteklemiyorsa) sessizce bos donulur -- bu bilgi olmadan da rapor
+    gecerlidir, sadece daha az detaylidir.
+    """
+    safe_disk_path = shlex.quote(disk_path)
+    output, _error, _exit_status = ssh.run_command(
+        f"lsblk -d -n -P -o MODEL,SERIAL {safe_disk_path}"
+    )
+    if not output:
+        return ""
+    model = re.search(r'MODEL="([^"]*)"', output)
+    serial = re.search(r'SERIAL="([^"]*)"', output)
+    model_val = (model.group(1) if model else "").strip()
+    serial_val = (serial.group(1) if serial else "").strip()
+    parts = []
+    if model_val:
+        parts.append(f"Model: {model_val}")
+    if serial_val:
+        parts.append(f"Seri No: {serial_val}")
+    return ", ".join(parts)
 
 
 def get_remote_block_hash(ssh, disk_path, block_no, block_size_mb, password):
@@ -388,6 +434,26 @@ def acquire_disk_image(
             f"planlaniyor: {disk_path}",
         )
 
+    if start_block == 0:
+        # Saatler surebilecek bir aktarimin sonda "yerel disk doldu" ile
+        # yarim kalmasini onlemek icin -- resume durumunda (start_block > 0)
+        # bu kontrol atlanir, o zaten kismen yer kaplamis bir islemi devam
+        # ettiriyor.
+        needed_bytes = total_blocks * block_size_mb * 1024 * 1024
+        free_bytes = shutil.disk_usage(output_dir).free
+        if free_bytes < needed_bytes:
+            print(
+                f"[-] Yerel diskte yeterli bos alan yok: gereken ~"
+                f"{needed_bytes / (1024**3):.2f} GB, bos ~{free_bytes / (1024**3):.2f} GB. "
+                f"Islem baslatilmiyor."
+            )
+            coc.log_event(
+                coc.EVENT_EXAM_ERROR,
+                f"Yerel diskte yeterli bos alan yok (gereken ~{needed_bytes} bayt, "
+                f"bos ~{free_bytes} bayt), imaj alma baslatilmadi: {disk_path}",
+            )
+            return None
+
     if resume_state:
         acquired_blocks = list(resume_state.get("acquired_blocks", []))
         failed_blocks = list(resume_state.get("failed_blocks", []))
@@ -561,6 +627,32 @@ def concatenate_blocks(block_paths, total_blocks, output_dir=IMAGE_DIR, output_p
         print(f"[i] {total_blocks} parca dosyasi temizlendi (birlesik imaj korunuyor).")
 
     return output_path
+
+
+def compress_image(image_path, remove_original=True):
+    """
+    Tamamlanmis, HAM (birlestirilmis) imaji gzip ile sikistirir --
+    "<image_path>.gz" olarak yazar. SADECE disk alani tasarrufu icindir;
+    delil butunlugu imaj SIKISTIRILMADAN ONCE (bu fonksiyon cagrilmadan
+    once) hesaplanmis master hash'e dayanir -- o hash HAM icerige aittir,
+    .gz dosyasinin kendi baytlarina degil (rapor/verify_report.py bunu
+    acikca belirtir/ hesaba katar).
+
+    remove_original=True (varsayilan): sikistirma basariyla bitince ham
+    dosya silinir -- aksi halde hem ham hem sikistirilmis kopya ayni anda
+    durur, ozelligin butun amaci (disk alani tasarrufu) bosa cikar.
+
+    Buyuk dosyalarda sabit bellek kullanimi icin akis (streaming) halinde
+    kopyalanir -- tum imaj hafizaya yuklenmez.
+    """
+    compressed_path = image_path + ".gz"
+    with open(image_path, "rb") as kaynak, gzip.open(compressed_path, "wb") as hedef:
+        shutil.copyfileobj(kaynak, hedef, length=1024 * 1024)
+
+    if remove_original:
+        os.remove(image_path)
+
+    return compressed_path
 
 
 def local_master_hash(image_path):

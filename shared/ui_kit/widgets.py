@@ -8,7 +8,7 @@ yazilmiyor.
 """
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QColor, QPainter, QPen
+from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
     QAbstractButton, QFrame, QGraphicsDropShadowEffect, QHBoxLayout,
     QLabel, QLineEdit, QProgressBar, QPushButton, QVBoxLayout, QWidget,
@@ -237,6 +237,82 @@ class RadioButton(QAbstractButton):
         # zaman gorunmuyordu (erisilebilirlik denetiminde bulundu, WCAG
         # 2.4.7 "Focus Visible"). Butun kontrolun etrafina ince, yuvarlak
         # koseli bir cerceve cizerek duzeltildi.
+        if self.hasFocus():
+            painter.setPen(QPen(QColor(t.ACCENT_TEXT), 2))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            focus_rect = self.rect().adjusted(1, 1, -1, -1)
+            painter.drawRoundedRect(focus_rect, 4, 4)
+        painter.end()
+
+
+class Checkbox(QAbstractButton):
+    """
+    RadioButton ile AYNI cizim/odak deseni (yuvarlak yerine kose radiuslu
+    kare + isaretliyken beyaz check isareti). Tasarim sisteminde onceden
+    checkbox ihtiyaci olmadigi icin yoktu -- ilk kullanim yerinde (gzip
+    sikistirma secenegi) varsayilan QCheckBox yerine bu eklendi, aksi
+    halde tek bir kontrol geri kalan her seyle (renk, odak halkasi,
+    kose radiusu) tutarsiz kalirdi.
+    """
+
+    def __init__(self, text="", parent=None):
+        super().__init__(parent)
+        self.setText(text)
+        self.setCheckable(True)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setMinimumHeight(24)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+
+    def sizeHint(self):
+        fm = self.fontMetrics()
+        width = 22 + fm.horizontalAdvance(self.text()) + 8
+        return type(self.minimumSize())(width, 24)
+
+    def focusInEvent(self, event):
+        super().focusInEvent(event)
+        self.update()
+
+    def focusOutEvent(self, event):
+        super().focusOutEvent(event)
+        self.update()
+
+    def paintEvent(self, _event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        cy = self.height() // 2
+        box_d = 16
+        box_rect = (2, cy - box_d // 2, box_d, box_d)
+
+        if self.isChecked():
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor(t.ACCENT))
+            painter.drawRoundedRect(*box_rect, 4, 4)
+            check = QPainterPath()
+            x, y = box_rect[0], box_rect[1]
+            check.moveTo(x + 3.5, y + 8.2)
+            check.lineTo(x + 6.7, y + 11.5)
+            check.lineTo(x + 12.5, y + 4.5)
+            check_pen = QPen(QColor("#FFFFFF"), 1.8)
+            check_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+            check_pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+            painter.setPen(check_pen)
+            painter.drawPath(check)
+        else:
+            painter.setPen(QPen(QColor(t.BORDER), 1.5))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawRoundedRect(*box_rect, 4, 4)
+
+        painter.setPen(QColor(t.TEXT_MAIN))
+        font = painter.font()
+        font.setFamily(t.FONT_UI)
+        font.setPixelSize(t.SIZE_BODY)
+        painter.setFont(font)
+        painter.drawText(
+            box_d + 8, 0, self.width() - box_d - 8, self.height(),
+            Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, self.text(),
+        )
+
         if self.hasFocus():
             painter.setPen(QPen(QColor(t.ACCENT_TEXT), 2))
             painter.setBrush(Qt.BrushStyle.NoBrush)

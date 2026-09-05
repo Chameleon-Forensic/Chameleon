@@ -21,6 +21,7 @@ import base64
 import hashlib
 import json
 import os
+import shutil
 from datetime import datetime, timezone
 
 import chain_of_custody as coc
@@ -88,6 +89,32 @@ def get_disk_size_bytes_windows(ssh, disk_number):
         return int((out or "").strip())
     except (ValueError, AttributeError):
         return None
+
+
+def get_disk_description_windows(ssh, disk_number):
+    """image_acquirer.get_disk_description ile ayni amac (Windows karsiligi):
+    diskin model/seri numarasini alir. ConvertTo-Json kullanilir -- FriendlyName
+    genelde bosluk icerir (orn. "Virtual HD"), duz metin ciktisi guvenilir
+    parse edilemez."""
+    cmd = (
+        f"(Get-Disk -Number {int(disk_number)} | "
+        f"Select-Object -Property FriendlyName,SerialNumber | ConvertTo-Json -Compress)"
+    )
+    out, _err, _code = ssh.run_command(cmd)
+    if not out:
+        return ""
+    try:
+        data = json.loads(out.strip())
+    except (ValueError, TypeError):
+        return ""
+    model_val = str(data.get("FriendlyName") or "").strip()
+    serial_val = str(data.get("SerialNumber") or "").strip()
+    parts = []
+    if model_val:
+        parts.append(f"Model: {model_val}")
+    if serial_val:
+        parts.append(f"Seri No: {serial_val}")
+    return ", ".join(parts)
 
 
 def _block_read_script(disk_number, offset, length):
@@ -201,6 +228,20 @@ def acquire_disk_image_windows(
             return None
         block_bytes = block_size_mb * 1024 * 1024
         total_blocks = (disk_size + block_bytes - 1) // block_bytes
+
+    if start_block == 0:
+        # bkz. image_acquirer.py'deki AYNI kontrol: saatler surebilecek bir
+        # aktarimin sonda "yerel disk doldu" ile yarim kalmasini onler.
+        needed_bytes = total_blocks * block_size_mb * 1024 * 1024
+        free_bytes = shutil.disk_usage(output_dir).free
+        if free_bytes < needed_bytes:
+            coc.log_event(
+                coc.EVENT_EXAM_ERROR,
+                f"Yerel diskte yeterli bos alan yok (gereken ~{needed_bytes} bayt, "
+                f"bos ~{free_bytes} bayt), imaj alma baslatilmadi (Windows): "
+                f"PhysicalDrive{disk_number}",
+            )
+            return None
 
     if resume_state:
         acquired_blocks = list(resume_state.get("acquired_blocks", []))

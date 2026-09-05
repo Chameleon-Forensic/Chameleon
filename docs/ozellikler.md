@@ -20,8 +20,16 @@ Server) yeterlidir.
   - **Ayarlanabilir parça (blok) boyutu**: 4 / 16 / 32 / 64 MB arasından seçilebilir
   - **Bağlantı koparsa devam edilebilir (resume)**: Yarım kalan bir işlem,
     kaldığı yerden tekrar başlatılabilir
+  - **Yerel disk alanı ön kontrolü**: İmaj almaya başlamadan önce, yerel
+    çıktı konumunda yeterli boş alan olup olmadığı kontrol edilir —
+    saatler süren bir aktarımın sonda "disk doldu"ya çarpması önlenir
 - **Tek Dosya / Klasör**: Tüm diski değil, belirli bir dosyayı ya da klasörü
   (alt klasörleriyle birlikte) alır; her dosya kendi SHA-256'sı ile doğrulanır.
+  Büyük dosyalar da (tam disk gibi) parça parça alınır -- bağlantı bir dosyanın
+  ortasında koparsa, o dosya baştan değil kaldığı parçadan devam eder.
+  - **Sıkıştırma (gzip, sadece Offline modda)**: Tam disk imajı isteğe bağlı
+    olarak gzip ile sıkıştırılıp diskten tasarruf edilebilir. Delil bütünlüğü
+    hash'i her zaman sıkıştırılmamış içeriğe aittir.
 
 ### RAM İmajı Alma (Windows, yerel)
 Bu bilgisayarın kendi belleğini imaj alır — uzak bağlantı gerekmez.
@@ -62,9 +70,19 @@ duruma göre değişir:
 - **Otomatik rapor**: Her işlem sonunda, vaka bilgileri, hedef bilgisi, hash,
   boyut, sonuç ve tam delil zinciri olay listesini içeren bir rapor
   (`report.json` + yazdırılabilir `report.html`) otomatik üretilir. İşlem
-  bitince ekranda bir özet de gösterilir.
+  bitince ekranda bir özet de gösterilir. Tam disk alımlarında kaynağın
+  sadece yolu (`/dev/sdb` gibi) değil, gerçek disk modeli/seri numarası da
+  rapora yazılır (kalıcı, benzersiz bir kaynak kimliği için).
+- **Rapor bütünlüğü**: `report.json` kaydedilirken yanına bir `.sha256`
+  dosyası da yazılır — raporun kendisinin sonradan değiştirilip
+  değiştirilmediği bağımsız olarak kontrol edilebilir.
+- **Bağımsız doğrulama aracı**: `verify_report.py`, Chameleon'un kendi
+  arayüzüne hiç ihtiyaç duymadan (komut satırından) bir raporu ve imajı
+  çapraz doğrular — ikinci bir uzman/denetçi aynı sonuca bağımsız
+  ulaşabilir.
 - **Vaka Geçmişi**: Bugüne kadar alınan tüm imajlar (hangi motor, hedef,
   inceleyen, yetkili kişi, sonuç) tek bir listede, sol menüden erişilebilir.
+  Liste CSV olarak dışa aktarılabilir.
 
 ## 4. Güvenlik
 
@@ -85,6 +103,9 @@ duruma göre değişir:
 ## 5. Kullanılabilirlik
 
 - Açık/koyu tema, Türkçe/İngilizce dil desteği.
+- SSH ekranındaki Host alanı, önceki başarılı bağlantıları hatırlar — bir
+  öneri seçildiğinde port/kullanıcı adı da otomatik doldurulur (parola
+  hiçbir zaman hatırlanmaz).
 - Sol menülü, her yöntemin kendi tanıtım sayfasına sahip olduğu bir arayüz —
   her sayfa ne işe yaradığını, ne zaman kullanılacağını, gerekenleri ve adım
   adım kullanımı anlatır.
@@ -93,7 +114,10 @@ duruma göre değişir:
   Full modu, Tor/.onion/operatör anahtarı) sade dilde anlatıldığı ayrı bir
   sayfa. İlgili ekranlardaki "Bu ne demek?" linkleri doğrudan o konuya götürür.
 - Tek bir `.exe` olarak paketlenebilir — kullanıcı Python kurmadan
-  çalıştırabilir.
+  çalıştırabilir. Gerçek anlamda taşınabilir (portable): vaka geçmişi,
+  loglar, öğrenilen sunucu kimlikleri ve operatör anahtarı `.exe`'nin
+  bulunduğu klasöre kaydedilir — USB'den farklı bir bilgisayara taşınıp
+  çalıştırıldığında bu veriler kaybolmaz/sıfırlanmaz.
 
 ## 6. Rol seçimi: operatör mü, hedef taraf mı?
 

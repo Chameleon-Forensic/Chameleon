@@ -17,20 +17,30 @@ sadece rapor kapsanan zaman araligindaki olaylari o dosyadan okuyup
 (coc.read_events) rapora gomer.
 """
 
+import hashlib
 import html
 import json
 import os
+import sys
 from datetime import datetime, timezone
 
 import chain_of_custody as coc
+from version import VERSION as TOOL_VERSION
 
 TOOL_NAME = "Chameleon"
-TOOL_VERSION = "1.0"
 
 # Tum motorlarin ayni "Vaka Gecmisi" listesini paylasmasi icin ortak,
 # tek bir dizin -- launcher'daki sidebar buradan okuyor. Kisisel/vaka
 # verisi oldugu icin .gitignore'da, asla commit edilmez.
-HISTORY_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
+#
+# Derlenmis (.exe) modda __file__ yerine sys.executable'a gore hesaplanir --
+# aksi halde vaka gecmisi PyInstaller'in her calistirmada silinen gecici
+# _MEIPASS klasorune yazilir, uygulama kapaninca tamamen kaybolur (bkz.
+# ssh_connector.CHAMELEON_KNOWN_HOSTS ile ayni gerekce, docs/roadmap.md).
+if getattr(sys, "frozen", False):
+    HISTORY_DIR = os.path.join(os.path.dirname(os.path.abspath(sys.executable)), "data")
+else:
+    HISTORY_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 HISTORY_FILE = os.path.join(HISTORY_DIR, "case_history.json")
 
 
@@ -265,12 +275,23 @@ class ForensicReport:
     def save(self, output_dir, filename="report.json"):
         os.makedirs(output_dir, exist_ok=True)
         path = os.path.join(output_dir, filename)
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(self.to_dict(), f, indent=2, ensure_ascii=False)
+        report_bytes = json.dumps(self.to_dict(), indent=2, ensure_ascii=False).encode("utf-8")
+        with open(path, "wb") as f:
+            f.write(report_bytes)
 
         html_path = os.path.splitext(path)[0] + ".html"
         with open(html_path, "w", encoding="utf-8") as f:
             f.write(self.to_html())
+
+        # report.json'un KENDISI sonradan degistirilirse (rapor uzerinde
+        # oynama) bunu ayrica fark edebilmek icin -- rapor bir kere
+        # kaydedildikten sonra bu hash'e karsi tekrar dogrulanabilir.
+        # save() dogrulama sonrasi TEKRAR cagrildiginda (set_verification)
+        # bu dosya da guncel icerige gore YENIDEN yazilir -- kasitli:
+        # sidecar her zaman "su an diskteki report.json'un hash'i" olmali.
+        sha256_path = path + ".sha256"
+        with open(sha256_path, "w", encoding="utf-8") as f:
+            f.write(f"{hashlib.sha256(report_bytes).hexdigest()}  {filename}\n")
 
         self._append_to_history(path, html_path)
         return path

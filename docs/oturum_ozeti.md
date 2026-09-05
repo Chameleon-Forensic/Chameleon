@@ -344,6 +344,65 @@ taşımasını hoş bulmadığını bildirdi. `chameleon_gui.py`'deki iki
 taşıyor: Operatör kartı "Operatör Olarak Devam Et", hedef cihaz kartı
 "Bu Cihazla Devam Et". Fonksiyonel bir değişiklik yok, sadece metin.
 
+## 22. Product Manager degerlendirmesiyle 7 kucuk iyilestirme eklendi
+Kullanıcı, projeyi ağırlaştırmadan/kapsam dışına taşmadan hangi küçük
+özelliklerin eklenebileceğini sordu. "Product Manager" ajanı roadmap ve
+mevcut mimariyi tarayıp 8 öneri çıkardı; kullanıcı hepsini detaylı
+anlatıp uygulamamı istedi. Hiçbiri yeni bağımlılık gerektirmedi:
+- **Rapor sürüm hatası düzeltildi** — `TOOL_VERSION` artık gerçek
+  uygulama sürümünü (`shared/version.py`) okuyor, sabit "1.0" değil.
+- **Rapor sidecar hash'i** — `report.json.sha256`, kaydedildiği andaki
+  içeriğin hash'i.
+- **Bağımsız doğrulama CLI'si** — yeni `verify_report.py`, GUI'ye hiç
+  bağımlı olmadan report.json + imajı çapraz doğruluyor.
+- **Yerel disk alanı ön kontrolü** — imaj almadan önce boş alan
+  kontrolü, yetersizse işlem hiç başlamıyor.
+- **Disk model/seri no kaydı** — `lsblk -P` (Linux) / `Get-Disk`
+  (Windows) ile diskin gerçek kimliği rapora ekleniyor.
+- **Son bağlanılan hedefler hafızası** — host alanı için otomatik
+  tamamlama, port/kullanıcı adı otomatik dolduruluyor (şifre asla
+  saklanmıyor).
+- **SSH bağlantı zaman aşımı koddan ayarlanabilir** hale getirildi
+  (GUI'ye yeni bir panel eklenmeden).
+
+Yedinci öneri (Vaka Geçmişi'ne CSV dışa aktarma) uygulanırken **önemli
+bir bulgu** ortaya çıktı: `docs/roadmap.md`'nin "Yapıldı" dediği
+"Vaka Geçmişi" sidebar sayfası kodda hiç yok — muhtemelen
+customtkinter->PySide6 geçişinde launcher kabuğu sıfırdan kurulurken
+kaybolmuş. Backend (`case_history.json`/`read_history()`) sağlam, sadece
+UI sayfası eksik. CSV önerisi bu yüzden uygulanmadı, roadmap.md
+düzeltilip "Sırada" listesine "sayfa yeniden eklenmeli" olarak taşındı
+(detaylar [hatalar_ve_sonuclar.md](hatalar_ve_sonuclar.md)'da). Her
+değişiklik mock/headless testlerle ayrı ayrı doğrulandı (tamper
+tespiti, disk alanı yetersizliği senaryosu, model/seri no ayrıştırma,
+completer + otomatik doldurma).
+
+## 23. Roadmap'ten 4 madde sırayla tamamlandı: Vaka Geçmişi, sıkıştırma, dosya resume, gerçek portable exe
+Kullanıcı "Sırada" listesinden 1, 3, 6, 7 numaralı maddeleri sırayla
+istedi:
+- **Vaka Geçmişi sayfası** launcher'a geri eklendi (bir önceki bulunan
+  eksiklik) + CSV dışa aktarma butonu. Bunu test ederken TÜM launcher
+  sayfa geçişlerini etkileyen ortak bir `deleteLater()`/asenkronluk
+  hatası bulunup düzeltildi (`_clear_content()`'e `hide()` eklendi —
+  detaylar [hatalar_ve_sonuclar.md](hatalar_ve_sonuclar.md), genel ders
+  [ogrenilenler.md](ogrenilenler.md)'de).
+- **Offline modda isteğe bağlı gzip sıkıştırma** eklendi. Tasarım
+  sisteminde ilk kez bir `Checkbox` bileşeni yazıldı (RadioButton ile
+  aynı çizim/odak deseni). Delil bütünlüğü hash'i her zaman HAM içeriğe
+  ait kalıyor; `verify_report.py`'ye gzip farkındalığı eklendi.
+- **`file_acquirer.py`'de büyük dosya resume** — tek dosya alma artık
+  disk imajlamayla AYNI blok+doğrulama+yeniden bağlanma desenini
+  kullanıyor; bir dosyanın ortasında kopan bağlantı artık baştan değil
+  kaldığı bloktan devam ediyor.
+- **`Chameleon.exe` gerçekten portable oldu** — sadece roadmap'in
+  adlandırdığı iki yol değil (LOG_DIR/HISTORY_DIR), aynı hatanın
+  TOFU known_hosts ve operatör Tor anahtarında da bulunduğu ortaya
+  çıktı; hepsi `sys.executable`'a göre düzeltildi.
+
+Her madde mock SSH ve (portable düzeltmesi için) sahte `sys.frozen`/
+`sys.executable` simülasyonuyla ayrı ayrı test edildi; önceki tüm
+regresyon testleri tekrar geçti. Detaylar [roadmap.md](roadmap.md)'de.
+
 ## Şu an bekleyen
 - Operatörün, hedef tarafın ürettiği gerçek bir `.onion` adresine
   `tor_client.py` ile bağlanıp SSH kurabildiğinin doğrulanması (Tor

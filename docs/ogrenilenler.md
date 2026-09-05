@@ -183,3 +183,33 @@ bağımlı bir varsayım oluyordu. **Çözüm**: `icons.icon("folder"/
 render oluyor hem de geri kalan arayüzle (aynı ikon seti, aynı stil)
 tutarlı kalıyor. Genel kural: bu projede metin içine emoji gömmek yerine
 her zaman `shared/ui_kit/icons.py` kullanılmalı.
+
+## Boşluk içerebilecek alanlarda `lsblk`/benzeri araçların duz kolon ciktisina guvenme
+
+Disk model/seri no'yu rapora eklemek icin `lsblk -o MODEL,SERIAL` gibi
+duz, bosluk-ayrilmis kolon ciktisi kullanmak cazip görünüyor, ama MODEL
+alani genelde bosluk icerir (orn. "Samsung SSD 860 EVO", "Virtual
+Disk") -- bu da kolonlarin kacmasina/yanlis parcalanmaya yol acar.
+Coz: `lsblk -P` (key="value" cifti, satir basina bir cihaz) formatini
+kullanip regex ile (`MODEL="([^"]*)"`) cekmek -- deger ne kadar bosluk
+icerirse icersin tirnak isaretleri sinirlari kesin belirliyor. Ayni
+sinif sorun `Get-Disk`'in duz metin ciktisinda da var; orada
+`ConvertTo-Json` ile ayni cozum uygulanabilir. Genel kural: bir komut
+ciktisindan, degeri bosluk icerebilecek bir alani parse edecekseniz,
+o aracin sagladigi yapisal/key-value formatini (varsa) tercih edin,
+duz kolon hizalamasina guvenmeyin.
+
+## Qt'de deleteLater() kullanan HER fonksiyona hide() de ekle, sadece belirtiyi gorulen ekrana degil
+
+Bu projede AYNI hata iki kez, iki farkli yerde bulundu: once Bilgi
+Merkezi'nde (eski sayfa "Geri" sonrasi bir an gorunur kaliyordu), sonra
+Vaka Gecmisi sayfasi eklenirken tekrar (`_clear_content()`'te). Ikisinin
+de kok nedeni AYNIYDI (`deleteLater()`'in asenkron olmasi -- widget bir
+sonraki olay dongusune kadar hala "var" sayilir), ama ilk duzeltme
+SADECE o zamanki belirtiyi gosteren tek ekrana uygulanmisti, ortak
+kaynak fonksiyon (`_clear_content()`, TUM launcher sayfa gecislerinin
+kullandigi) duzeltilmemisti. Genel kural: `X.deleteLater()` yazan HER
+yere, hemen once `X.hide()` de eklenmeli -- bu, belirti nerede
+gorulurse gorulsun, PAYLASILAN silme fonksiyonunun kendisinde
+yapilmali, tek tek cagiran yerlerde degil. Aksi halde ayni sinif hata,
+farkli bir ekranda yeniden "kesfedilir".
