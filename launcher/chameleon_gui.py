@@ -549,6 +549,16 @@ class ChameleonWindow(QMainWindow):
         card.body.addLayout(row)
         return card, col
 
+    @staticmethod
+    def _bi(tr, en, sep="\n"):
+        """Turkce + Ingilizce metni birlikte dondurur. Hedef sihirbazi
+        (_show_target_wizard) icin: bu ekranda dil sececek bir Ayarlar
+        sayfasi yok (ozellikle sadece-hedef "hedef kiti" exe'sinde hic
+        yok) -- Turkce bilmeyen biri sahada bu ekranla karsilasirsa
+        okuyabilsin diye HER iki dil BIRLIKTE gosteriliyor, tek dil
+        secmek yerine."""
+        return f"{tr}{sep}{en}"
+
     def _show_target_wizard(self):
         self.setWindowTitle(t("title", self.lang))
         central = QWidget()
@@ -571,31 +581,48 @@ class ChameleonWindow(QMainWindow):
             back_btn = widgets.SecondaryButton("← Geri")
             back_btn.clicked.connect(self._back_from_target_wizard)
             header.addWidget(back_btn)
-        title = QLabel("Bu Cihazın İncelenmesi İçin Bağlantı Kanalı Aç")
+        title = QLabel(self._bi(
+            "Bu Cihazın İncelenmesi İçin Bağlantı Kanalı Aç",
+            "Open a Connection Channel for This Device's Examination",
+        ))
         title.setWordWrap(True)
         title.setStyleSheet(f"color:{ui.TEXT_MAIN}; font-family:'{ui.FONT_UI}'; font-size:{ui.SIZE_TITLE}px; font-weight:600;")
         header.addWidget(title, stretch=1)
         layout.addLayout(header)
 
-        intro = QLabel(
+        intro = QLabel(self._bi(
             "Bu ekran, bir operatörün bu bilgisayara UZAKTAN, güvenli bir şekilde "
             "bağlanabilmesi için gereken teknik kanalı açar. Hiçbir dosyanız/veriniz bu "
             "ekrandan paylaşılmaz -- sadece operatörün önceden size verdiği anahtarla "
-            "açılan, sadece ONA açık bir bağlantı noktası oluşturulur."
-        )
+            "açılan, sadece ONA açık bir bağlantı noktası oluşturulur.",
+            "This screen opens the technical channel an operator needs to connect to "
+            "this computer REMOTELY and securely. None of your files/data are shared "
+            "from this screen -- it only creates a connection point, opened with a key "
+            "the operator gave you beforehand, that only THEY can access.",
+        ))
         intro.setWordWrap(True)
         intro.setStyleSheet(f"color:{ui.TEXT_SECONDARY}; font-family:'{ui.FONT_UI}'; font-size:{ui.SIZE_HELPER}px;")
         layout.addWidget(intro)
 
         # Adim 1: anahtar gir
-        step1, col1 = self._step_card(1, "Operatör Anahtarını Girin")
+        step1, col1 = self._step_card(1, self._bi("Operatör Anahtarını Girin", "Enter the Operator Key"))
         col1.addWidget(BodyText(
-            "Operatörünüzden ÖNCEDEN aldığınız anahtarı (telefon/e-posta ile size iletilmiş "
-            "olmalı) aşağıya yapıştırın. Bu, sadece operatörün bu kanaldan bağlanabilmesini "
-            "sağlayan bir kod -- bir şifre değildir, kimseye zarar veremez.", secondary=True
+            self._bi(
+                "Operatörünüzden ÖNCEDEN aldığınız anahtarı (telefon/e-posta ile size iletilmiş "
+                "olmalı) aşağıya yapıştırın. Bu, sadece operatörün bu kanaldan bağlanabilmesini "
+                "sağlayan bir kod -- bir şifre değildir, kimseye zarar veremez.",
+                "Paste below the key you received from your operator BEFOREHAND (it should "
+                "have been sent to you by phone/e-mail). This is just a code that lets the "
+                "operator connect through this channel -- it is not a password, it cannot "
+                "harm anyone.",
+            ), secondary=True
         ))
         self.target_key_input = widgets.MonoInput()
-        self.target_key_input.setPlaceholderText("Operatörden aldığınız anahtarı buraya yapıştırın")
+        self.target_key_input.setPlaceholderText(self._bi(
+            "Operatörden aldığınız anahtarı buraya yapıştırın",
+            "Paste the key you received from the operator here",
+            sep=" / ",
+        ))
         col1.addWidget(self.target_key_input)
 
         # Yapistirilan anahtarin kisa bir "parmak izi" -- sahadaki kisi bunu
@@ -613,19 +640,28 @@ class ChameleonWindow(QMainWindow):
         self.target_key_input.textChanged.connect(self._update_target_key_fingerprint)
 
         col1.addWidget(BodyText(
-            "Başlatmadan önce yukarıdaki kodu telefonla operatöre okuyup, "
-            "kendi ekranındaki kodla AYNI olduğunu teyit edin.", secondary=True
+            self._bi(
+                "Başlatmadan önce yukarıdaki kodu telefonla operatöre okuyup, "
+                "kendi ekranındaki kodla AYNI olduğunu teyit edin.",
+                "Before starting, read the code above to the operator over the phone "
+                "and confirm it is THE SAME as the code on their own screen.",
+            ), secondary=True
         ))
         layout.addWidget(step1)
 
         # Adim 2: baslat
-        step2, col2 = self._step_card(2, "Bağlantıyı Başlatın")
+        step2, col2 = self._step_card(2, self._bi("Bağlantıyı Başlatın", "Start the Connection"))
         col2.addWidget(BodyText(
-            "Aşağıdaki butona basın ve bekleyin -- bu, cihazınızın bir güvenlik ağı "
-            "(Tor) üzerinden geçici bir kanal açmasını sağlar; birkaç dakika sürebilir.",
+            self._bi(
+                "Aşağıdaki butona basın ve bekleyin -- bu, cihazınızın bir güvenlik ağı "
+                "(Tor) üzerinden geçici bir kanal açmasını sağlar; birkaç dakika sürebilir.",
+                "Press the button below and wait -- this makes your device open a "
+                "temporary channel through a security network (Tor); it can take a few "
+                "minutes.",
+            ),
             secondary=True
         ))
-        self.target_start_btn = widgets.PrimaryButton("Bağlantıyı Başlat")
+        self.target_start_btn = widgets.PrimaryButton(self._bi("Bağlantıyı Başlat", "Start Connection", sep=" / "))
         self.target_start_btn.clicked.connect(self._target_start)
         col2.addWidget(self.target_start_btn)
         self.target_status_label = QLabel("")
@@ -636,21 +672,27 @@ class ChameleonWindow(QMainWindow):
         layout.addWidget(step2)
 
         # Adim 3: adresi ilet (basarili olunca gorunur)
-        step3, col3 = self._step_card(3, "Oluşan Adresi Operatöre İletin")
+        step3, col3 = self._step_card(3, self._bi("Oluşan Adresi Operatöre İletin", "Send the Generated Address to the Operator"))
         col3.addWidget(BodyText(
-            "Aşağıda çıkan adresi KENDİ telefonunuzla fotoğraflayın/yazın ve operatöre "
-            "KENDİ mesajlaşma kanalınızla (SMS, telefonla okuyarak vb.) iletin -- bu "
-            "cihazın kendi ağı/uygulamaları hiç kullanılmaz.", secondary=True
+            self._bi(
+                "Aşağıda çıkan adresi KENDİ telefonunuzla fotoğraflayın/yazın ve operatöre "
+                "KENDİ mesajlaşma kanalınızla (SMS, telefonla okuyarak vb.) iletin -- bu "
+                "cihazın kendi ağı/uygulamaları hiç kullanılmaz.",
+                "Photograph or write down the address shown below with YOUR OWN phone and "
+                "send it to the operator through YOUR OWN messaging channel (SMS, reading "
+                "it over the phone, etc.) -- none of this device's own network/apps are "
+                "used.",
+            ), secondary=True
         ))
         onion_row = QHBoxLayout()
         self.target_onion_input = widgets.MonoInput()
         self.target_onion_input.setReadOnly(True)
         onion_row.addWidget(self.target_onion_input, stretch=1)
-        copy_btn = widgets.SecondaryButton("Kopyala")
+        copy_btn = widgets.SecondaryButton(self._bi("Kopyala", "Copy", sep=" / "))
         copy_btn.clicked.connect(self._target_copy_onion)
         onion_row.addWidget(copy_btn)
         col3.addLayout(onion_row)
-        stop_btn = widgets.SecondaryButton("Bağlantıyı Kapat")
+        stop_btn = widgets.SecondaryButton(self._bi("Bağlantıyı Kapat", "Close Connection", sep=" / "))
         stop_btn.clicked.connect(self._target_stop)
         col3.addWidget(stop_btn)
         self.target_result_card = step3
@@ -688,7 +730,8 @@ class ChameleonWindow(QMainWindow):
         if not key:
             self.target_key_fingerprint.hide()
             return
-        self.target_key_fingerprint.setText(f"Kod: {key_fingerprint(key)}")
+        kod = key_fingerprint(key)
+        self.target_key_fingerprint.setText(self._bi(f"Kod: {kod}", f"Code: {kod}", sep=" / "))
         self.target_key_fingerprint.show()
 
     def _target_start(self):
@@ -697,14 +740,22 @@ class ChameleonWindow(QMainWindow):
         key = self.target_key_input.text().strip()
         if not key:
             self.target_status_label.setStyleSheet(f"color:{ui.ERROR}; font-family:'{ui.FONT_UI}'; font-size:{ui.SIZE_HELPER}px;")
-            self.target_status_label.setText("Önce operatör anahtarını girin.")
+            self.target_status_label.setText(self._bi(
+                "Önce operatör anahtarını girin.", "Enter the operator key first.", sep=" / "
+            ))
             self.target_status_label.show()
             return
 
         self.target_start_btn.setEnabled(False)
-        self.target_start_btn.setText("Başlatılıyor... (birkaç dakika sürebilir)")
+        self.target_start_btn.setText(self._bi(
+            "Başlatılıyor... (birkaç dakika sürebilir)",
+            "Starting... (can take a few minutes)",
+            sep=" / ",
+        ))
         self.target_status_label.setStyleSheet(f"color:{ui.TEXT_SECONDARY}; font-family:'{ui.FONT_UI}'; font-size:{ui.SIZE_HELPER}px;")
-        self.target_status_label.setText("Bağlantı hazırlanıyor, lütfen bekleyin...")
+        self.target_status_label.setText(self._bi(
+            "Bağlantı hazırlanıyor, lütfen bekleyin...", "Preparing the connection, please wait...", sep=" / "
+        ))
         self.target_status_label.show()
 
         self._target_worker = TargetKitWorker(key)
@@ -718,7 +769,7 @@ class ChameleonWindow(QMainWindow):
         # baglanti varken tekrar "Baslat"a basilip ikinci bir hidden service
         # kurulmaya calisilmasin diye (once "Baglantiyi Kapat" gerekir).
         self.target_start_btn.setEnabled(False)
-        self.target_start_btn.setText("Bağlı")
+        self.target_start_btn.setText(self._bi("Bağlı", "Connected", sep=" / "))
         self.target_status_label.hide()
         self.target_key_input.setEnabled(False)
         self.target_onion_input.setText(f"{handle.onion_address}.onion")
@@ -726,7 +777,7 @@ class ChameleonWindow(QMainWindow):
 
     def _on_target_error(self, msg):
         self.target_start_btn.setEnabled(True)
-        self.target_start_btn.setText("Bağlantıyı Başlat")
+        self.target_start_btn.setText(self._bi("Bağlantıyı Başlat", "Start Connection", sep=" / "))
         self.target_status_label.setStyleSheet(f"color:{ui.ERROR}; font-family:'{ui.FONT_UI}'; font-size:{ui.SIZE_HELPER}px;")
         self.target_status_label.setText(msg)
         self.target_status_label.show()

@@ -425,6 +425,30 @@ küçük (~%2, PySide6/Qt ve gömülü tor.exe zaten HER İKİ tarafta da
 gerekli olduğu için) — asıl kazanç kafa karışıklığının önlenmesi.
 Detaylar [roadmap.md](roadmap.md)'de.
 
+## 25. Hedef sihirbazı iki dilli (TR+EN) yapıldı, gerçek Tor ile uçtan uca test edildi
+Hedef kiti exe'sinde (`ChameleonHedefKiti.exe`) dil seçebilecek bir
+Ayarlar sayfası hiç yok — kullanıcı, Türkçe bilmeyen birinin sahada bu
+ekranla karşılaşabileceğini belirtip her iki dilin BİRLİKTE (tek dil
+seçmek yerine) gösterilmesini istedi. `_show_target_wizard()`'daki her
+başlık/açıklama/buton/durum metni artık `_bi(tr, en)` yardımcı
+fonksiyonuyla iki dili birlikte gösteriyor (uzun metinlerde alt alta,
+buton/durum metinlerinde " / " ile). Bu ekran hem tam `Chameleon.exe`
+hem hedef kitinde AYNI kod, tek bir yerde güncellendi.
+
+Ardından hedef kitine "gerekli tüm testler" istendi — bu kez gerçek
+derlenmiş `.exe` üzerinden, Windows UI Automation ile (metin kutusuna
+gerçek bir anahtar yazıp butona TIKLANARAK, ekran koordinatı kullanmadan)
+uçtan uca test edildi: geçersiz uzunlukta bir test anahtarıyla ilk
+denemede beklenen hata mesajı çıktı (gerçek bir bug değil, benim
+anahtarım 2 karakter eksikti); doğru uzunlukta, gerçekten üretilmiş bir
+anahtarla GERÇEK Tor ağına bağlanıp gerçek bir `.onion` adresi üretildi,
+"Bağlantıyı Kapat" ile Tor süreci temiz kapandığı doğrulandı, pencere
+zorla (force-kill) kapatıldığında da orphan Tor süreci kalmadığı
+görüldü. Aynı akış tam `Chameleon.exe` üzerinden de (rol seçimi →
+"Bu Cihazla Devam Et") tekrarlanıp "Geri" butonunun hâlâ durduğu ve
+metnin orada da iki dilli olduğu doğrulandı. Her iki `.exe` de bu
+değişikliklerle yeniden derlendi.
+
 ## Şu an bekleyen
 - Operatörün, hedef tarafın ürettiği gerçek bir `.onion` adresine
   `tor_client.py` ile bağlanıp SSH kurabildiğinin doğrulanması (Tor
