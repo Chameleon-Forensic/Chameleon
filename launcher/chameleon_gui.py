@@ -426,7 +426,17 @@ class ChameleonWindow(QMainWindow):
         self._return_page = None
         self._return_nav = None
         self._set_window_icon()
-        self._show_role_select()
+        # Sadece hedef-taraf (Bu Cihaz Inceleniyor) modunu iceren, daha
+        # hafif/kafa karistirmayan ayri bir .exe icin (bkz. target_kit_main.py
+        # + build_target_kit.spec) -- o giris noktasi bu degiskeni import
+        # etmeden ONCE ayarlar. Boyle bir exe'de operator araclarinin (SSH/RAM
+        # motorlari) kodu hic PAKETLENMEDIGI icin rol secimi anlamsiz/
+        # kafa karistirici olurdu -- dogrudan sihirbaz acilir.
+        self.target_only = os.environ.get("CHAMELEON_TARGET_ONLY") == "1"
+        if self.target_only:
+            self._show_target_wizard()
+        else:
+            self._show_role_select()
 
     def closeEvent(self, event):
         """Hedef taraf sihirbazinda acik birakilmis bir Tor sureci varsa,
@@ -554,9 +564,13 @@ class ChameleonWindow(QMainWindow):
         outer.addWidget(scroll)
 
         header = QHBoxLayout()
-        back_btn = widgets.SecondaryButton("← Geri")
-        back_btn.clicked.connect(self._back_from_target_wizard)
-        header.addWidget(back_btn)
+        if not self.target_only:
+            # Sadece-hedef exe'sinde donulecek bir rol secim ekrani hic
+            # olmadigi icin (operator araclari paketlenmedi) bu buton
+            # gosterilmez.
+            back_btn = widgets.SecondaryButton("← Geri")
+            back_btn.clicked.connect(self._back_from_target_wizard)
+            header.addWidget(back_btn)
         title = QLabel("Bu Cihazın İncelenmesi İçin Bağlantı Kanalı Aç")
         title.setWordWrap(True)
         title.setStyleSheet(f"color:{ui.TEXT_MAIN}; font-family:'{ui.FONT_UI}'; font-size:{ui.SIZE_TITLE}px; font-weight:600;")
@@ -1448,7 +1462,7 @@ def show_splash(on_done):
     return splash, layout_widget
 
 
-if __name__ == "__main__":
+def main():
     app = QApplication([])
     fonts.register_fonts()
     app.setStyleSheet(ui.base_stylesheet())
@@ -1461,3 +1475,7 @@ if __name__ == "__main__":
 
     splash, _kept_alive = show_splash(_start_main)
     sys.exit(app.exec())
+
+
+if __name__ == "__main__":
+    main()

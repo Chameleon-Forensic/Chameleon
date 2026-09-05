@@ -29,7 +29,8 @@ chameleon/
 │   ├── version.py         # tek surum numarasi
 │   ├── assets/            # logo (chameleon_icon.png, chameleon.ico)
 │   └── bin/tor/windows/   # gömülü Tor binary'si (tor.exe)
-├── build.spec             # PyInstaller: tek Chameleon.exe üretir
+├── build.spec             # PyInstaller: tek Chameleon.exe üretir (operatör, tam paket)
+├── build_target_kit.spec  # PyInstaller: ChameleonHedefKiti.exe üretir (SADECE hedef-taraf, hafif)
 └── docs/roadmap.md        # planlanan işler
 ```
 
@@ -111,6 +112,15 @@ listesi bunu telafi ediyor; yeni bir tkinter alt modülü ya da üçüncü
 parti kütüphane eklenirse orası da güncellenmeli. Detaylar ve karşılaşılan
 hatalar için: [docs/hatalar_ve_sonuclar.md](docs/hatalar_ve_sonuclar.md),
 genel teknik dersler için [docs/ogrenilenler.md](docs/ogrenilenler.md).
+
+Ayrıca `pyinstaller build_target_kit.spec` → `dist/ChameleonHedefKiti.exe`:
+sahaya götürülecek, SADECE hedef-taraf (Bu Cihaz İnceleniyor) modunu
+içeren, operatör araçları (SSH/RAM motorları, dolayısıyla `paramiko`)
+hiç paketlenmemiş ayrı bir derleme. Giriş noktası `launcher/
+target_kit_main.py` — `CHAMELEON_TARGET_ONLY` ortam değişkenini
+`chameleon_gui` import edilmeden önce ayarlar, `ChameleonWindow` bunu
+görünce rol seçim ekranını atlayıp doğrudan hedef sihirbazını açar.
+Aynı `chameleon_gui.py` kullanılır, kod tekrarlanmaz.
 
 ## Test yaklaşımı
 

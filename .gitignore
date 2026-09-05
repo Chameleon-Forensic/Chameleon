@@ -6,12 +6,13 @@ __pycache__/
 venv/
 
 # PyInstaller build ciktisi (dist/build klasorleri) -- ama elle yazilan
-# build.spec (paketleme tarifi) commit edilmeli, otomatik uretilen .spec'ler
-# degil, o yuzden ozel olarak istisna tutuluyor.
+# build.spec/build_target_kit.spec (paketleme tarifleri) commit edilmeli,
+# otomatik uretilen .spec'ler degil, o yuzden ozel olarak istisna tutuluyor.
 build/
 dist/
 *.spec
 !build.spec
+!build_target_kit.spec
 
 # Imaj / rapor / log ciktilari (hicbir zaman commit edilmez)
 *.raw

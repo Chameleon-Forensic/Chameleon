@@ -130,3 +130,8 @@ Uygulama açılışta önce "Bu bilgisayardaki kişi kimsiniz?" diye sorar:
   adımdan oluşan bir sihirbaz açılır (operatör anahtarını yapıştır →
   bağlantıyı başlat → oluşan adresi operatöre ilet). Bu, Tor (Acil Durum)
   yönteminde sahaya götürülen "taşınabilir kit"in arayüzüdür.
+- Sahaya götürülecek **ayrı, daha hafif bir `.exe`** de var
+  (`dist/ChameleonHedefKiti.exe`) — sadece bu sihirbazı içerir, rol
+  seçimi bile göstermez; operatör araç seti (SSH/RAM motorları) hiç
+  paketlenmediği için teknik bilgisi olmayan kişi ilgisiz bir menüyle
+  hiç karşılaşmaz.

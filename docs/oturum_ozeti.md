@@ -403,6 +403,28 @@ Her madde mock SSH ve (portable düzeltmesi için) sahte `sys.frozen`/
 `sys.executable` simülasyonuyla ayrı ayrı test edildi; önceki tüm
 regresyon testleri tekrar geçti. Detaylar [roadmap.md](roadmap.md)'de.
 
+## 24. Sahaya özel, hafif "hedef kiti" exe'si eklendi
+Kullanıcı, sahaya götürülen exe'nin operatörün TÜM araç setini (SSH/RAM
+motorları vb.) içermesinin hem gereksiz hem kafa karıştırıcı olduğunu,
+sadece "Bu Cihaz İnceleniyor" sihirbazını içeren ayrı, daha hafif bir
+paket önerdi. Yeni `build_target_kit.spec` + `launcher/
+target_kit_main.py` (ince bir giriş noktası, `CHAMELEON_TARGET_ONLY`
+ortam değişkenini ayarlayıp AYNI `chameleon_gui.py`'yi çağırır) ile
+`dist/ChameleonHedefKiti.exe` üretiliyor. `ChameleonWindow` bu
+değişkeni görünce rol seçim ekranını atlayıp doğrudan sihirbazı açıyor,
+"Geri" butonu da (dönülecek bir yer olmadığı için) gizleniyor.
+`engines/ssh_engine/local_collector/*` ve `engines/ram_engine/*` bu
+derlemeye hiç paketlenmiyor.
+
+Gerçek bir derleme yapılıp iki exe de gerçek Windows süreci olarak
+başlatıldı; Windows UI Automation ile (tıklama YAPILMADAN, sadece
+salt-okunur metin/buton okumasıyla) hem hedef kitinin doğrudan
+sihirbaza gittiği hem tam `Chameleon.exe`'nin rol seçim ekranını hâlâ
+gösterdiği doğrulandı. Boyut farkı dürüstçe ölçüldü: beklenenin aksine
+küçük (~%2, PySide6/Qt ve gömülü tor.exe zaten HER İKİ tarafta da
+gerekli olduğu için) — asıl kazanç kafa karışıklığının önlenmesi.
+Detaylar [roadmap.md](roadmap.md)'de.
+
 ## Şu an bekleyen
 - Operatörün, hedef tarafın ürettiği gerçek bir `.onion` adresine
   `tor_client.py` ile bağlanıp SSH kurabildiğinin doğrulanması (Tor

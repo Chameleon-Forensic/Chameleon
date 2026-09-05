@@ -96,6 +96,7 @@ Not: Bu projeye başka bir ekiple (BitGuard) birleşme denendi, anlaşamayıp ip
 | RAM motoru arayüzü (CTk, `RamImagerCLI.exe`'yi çağırır) | `engines/ram_engine/ram_gui.py` |
 | RAM motoru (derlenmiş, kaynak yok) | `engines/ram_engine/cli/RamImagerCLI.exe` (vendor'in `RamImagerGUI.exe`'si artık kullanılmıyor) |
 | Launcher (seçim ekranı, iki motoru da aynı pencerede gömer) | `launcher/chameleon_gui.py` |
+| Sahaya özel hafif "hedef kiti" exe'sinin giriş noktası | `launcher/target_kit_main.py` (+ `build_target_kit.spec`) |
 | Ortak renk paleti | `shared/theme.py` |
 | Dil tablosu (TR/EN) | `shared/i18n/strings.py` |
 | Planlanan işler | `docs/roadmap.md` |
