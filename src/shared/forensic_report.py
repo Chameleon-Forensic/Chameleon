@@ -25,6 +25,7 @@ import sys
 from datetime import datetime, timezone
 
 import chain_of_custody as coc
+import tz_display
 from version import VERSION as TOOL_VERSION
 
 TOOL_NAME = "Chameleon"
@@ -51,7 +52,7 @@ def _now_iso():
 
 
 class ForensicReport:
-    def __init__(self, case_id="", examiner="", organization="", custodian=""):
+    def __init__(self, case_id="", examiner="", organization="", custodian="", display_timezone=None):
         self.case_id = case_id
         self.examiner = examiner
         self.organization = organization
@@ -59,6 +60,13 @@ class ForensicReport:
         # calisanı, cihaz sahibi) -- kim inceledi kadar "cihaz kimden,
         # kimin izniyle alindi" bilgisi de delil zinciri icin onemli.
         self.custodian = custodian
+        # SADECE report.html'de (insan tarafindan okunan) UTC zaman
+        # damgalarinin YANINA eklenen bir yerel saat aciklamasi icin --
+        # tz_display.common_timezones()'dan bir IANA anahtari (orn.
+        # "Europe/Istanbul") ya da None/"UTC" (hic eklenmez). report.json'un
+        # KENDISI (to_dict()) bundan HIC etkilenmez, hep saf UTC kalir --
+        # delil olarak gecerli olan deger budur.
+        self.display_timezone = display_timezone
 
         self.engine = None
         self.method = None
@@ -240,8 +248,8 @@ class ForensicReport:
     <div>Kaynak</div><div>{esc(d['acquisition']['source_identifier']) or '—'}</div>
     <div>Alma Türü</div><div>{esc(d['acquisition']['acquisition_type']) or '—'}</div>
     <div>Bağlantı Yöntemi</div><div>{esc(d['acquisition']['connection_method']) or '—'}</div>
-    <div>Başlangıç (UTC)</div><div>{esc(d['acquisition']['start_time_utc'])}</div>
-    <div>Bitiş (UTC)</div><div>{esc(d['acquisition']['end_time_utc'])}</div>
+    <div>Başlangıç (UTC)</div><div>{esc(tz_display.format_with_local(d['acquisition']['start_time_utc'], self.display_timezone))}</div>
+    <div>Bitiş (UTC)</div><div>{esc(tz_display.format_with_local(d['acquisition']['end_time_utc'], self.display_timezone))}</div>
     <div>Write-Blocking</div><div>{esc(d['acquisition']['write_blocking_applied'])} — {esc(d['acquisition']['write_blocking_reason']) or '—'}</div>
   </div>
 
@@ -269,7 +277,8 @@ class ForensicReport:
     {satirlar}
   </table>
 
-  <div class="footer">Bu rapor Chameleon tarafından otomatik üretilmiştir. Log dosyası: {esc(d['chain_of_custody']['log_file'])}</div>
+  <div class="footer">Bu rapor Chameleon tarafından otomatik üretilmiştir. Log dosyası: {esc(d['chain_of_custody']['log_file'])}
+  {"<br>Parantez içindeki yerel saat SADECE okunabilirlik içindir; delil olarak geçerli olan değer her zaman UTC'dir." if self.display_timezone and self.display_timezone != "UTC" else ""}</div>
 </body></html>"""
 
     def save(self, output_dir, filename="report.json"):
@@ -316,6 +325,7 @@ class ForensicReport:
             "case_id": self.case_id,
             "examiner": self.examiner,
             "custodian": self.custodian,
+            "organization": self.organization,
             "engine": self.engine,
             "method": self.method,
             "target_os": self.target_os,

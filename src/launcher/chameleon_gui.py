@@ -17,7 +17,7 @@ from datetime import datetime
 from PySide6.QtCore import Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QColor, QIcon, QPixmap
 from PySide6.QtWidgets import (
-    QApplication, QButtonGroup, QFileDialog, QFrame, QHBoxLayout, QLabel,
+    QApplication, QButtonGroup, QComboBox, QFileDialog, QFrame, QHBoxLayout, QLabel,
     QMainWindow, QPushButton, QScrollArea, QSizePolicy, QSplashScreen,
     QStackedWidget, QVBoxLayout, QWidget,
 )
@@ -35,6 +35,7 @@ import version  # noqa: E402
 from ui_kit import theme_qt as ui, fonts, icons, widgets  # noqa: E402
 from help_content import HELP_TOPICS, get_topic  # noqa: E402
 from onion_auth import key_fingerprint  # noqa: E402
+import tz_display  # noqa: E402
 
 SSH_ENGINE_DIR = os.path.join(PROJECT_ROOT, "engines", "ssh_engine", "local_collector")
 RAM_ENGINE_DIR = os.path.join(PROJECT_ROOT, "engines", "ram_engine")
@@ -417,6 +418,10 @@ class ChameleonWindow(QMainWindow):
         super().__init__()
         self.lang = "tr"
         self.active_nav = "home"
+        # Rapor HTML'sinde UTC'nin YANINA (report.json'un kendisi hic
+        # etkilenmez) eklenen, sadece okunabilirlik icin yerel saat
+        # aciklamasi -- "UTC" = hic ek aciklama yok (varsayilan).
+        self.display_timezone = "UTC"
         self._target_handle = None
         self._target_worker = None
         # Bir arac ekranindaki ("SSH ile Uzak Imaj Al"/"RAM Imaji Al")
@@ -1089,6 +1094,7 @@ class ChameleonWindow(QMainWindow):
             ("case_id", "Vaka No" if lang == "tr" else "Case No"),
             ("examiner", "İnceleyen" if lang == "tr" else "Examiner"),
             ("custodian", "Cihaz Sahibi / Yetkili Kişi" if lang == "tr" else "Device Owner / Custodian"),
+            ("organization", "Organizasyon" if lang == "tr" else "Organization"),
         ]:
             row = QHBoxLayout()
             lbl = QLabel(f"{label}:")
@@ -1287,6 +1293,40 @@ class ChameleonWindow(QMainWindow):
         theme_card.body.addLayout(theme_row)
         body.addWidget(theme_card)
 
+        tz_card = widgets.Card("Saat Dilimi (Görüntüleme)" if lang == "tr" else "Time Zone (Display)")
+        tz_note = BodyText(
+            "Raporlardaki UTC zaman damgalarının yanına, sadece okunabilirlik için "
+            "yerel saat karşılığı eklenir -- delil olarak geçerli olan değer her "
+            "zaman UTC'dir, bu seçim report.json'un kendisini etkilemez."
+            if lang == "tr" else
+            "Adds a local-time equivalent next to UTC timestamps in reports, purely "
+            "for readability -- the value that stays evidentiary is always UTC, this "
+            "choice never affects report.json itself."
+        )
+        tz_card.body.addWidget(tz_note)
+        tz_row = QHBoxLayout()
+        tz_row.addWidget(QLabel("Saat Dilimi:" if lang == "tr" else "Time Zone:"))
+        tz_combo = QComboBox()
+        tz_combo.setMinimumWidth(280)
+        tz_combo.setStyleSheet(f"""
+            QComboBox {{ background-color:{ui.BG_LAYER2}; color:{ui.TEXT_MAIN};
+                border:1px solid {ui.BORDER}; border-radius:{ui.RADIUS}px; padding:4px 8px; }}
+        """)
+        tz_combo.addItem("UTC (yerel karşılık gösterilmez)" if lang == "tr" else "UTC (no local equivalent shown)", "UTC")
+        for key, label in tz_display.common_timezones():
+            if key == "UTC":
+                continue
+            tz_combo.addItem(label, key)
+        current_index = tz_combo.findData(self.display_timezone)
+        tz_combo.setCurrentIndex(current_index if current_index >= 0 else 0)
+        tz_combo.currentIndexChanged.connect(
+            lambda i: setattr(self, "display_timezone", tz_combo.itemData(i))
+        )
+        tz_row.addWidget(tz_combo)
+        tz_row.addStretch()
+        tz_card.body.addLayout(tz_row)
+        body.addWidget(tz_card)
+
         body.addWidget(BodyText(f"Chameleon v{version.VERSION}"))
         body.addStretch()
 
@@ -1352,6 +1392,7 @@ class ChameleonWindow(QMainWindow):
                 ("Hedef" if lang == "tr" else "Target", entry.get("target_host") or entry.get("source_identifier") or "—"),
                 ("İnceleyen" if lang == "tr" else "Examiner", entry.get("examiner") or "—"),
                 ("Yetkili Kişi" if lang == "tr" else "Custodian", entry.get("custodian") or "—"),
+                ("Organizasyon" if lang == "tr" else "Organization", entry.get("organization") or "—"),
                 ("Tarih" if lang == "tr" else "Date", entry.get("start_time_utc") or "—"),
             ]
             for etiket, deger in satirlar:
@@ -1398,7 +1439,7 @@ class ChameleonWindow(QMainWindow):
             return
 
         columns = [
-            "case_id", "examiner", "custodian", "engine", "method", "target_os",
+            "case_id", "examiner", "custodian", "organization", "engine", "method", "target_os",
             "target_host", "source_identifier", "connection_method", "status",
             "start_time_utc", "end_time_utc", "report_path",
         ]
@@ -1431,7 +1472,8 @@ class ChameleonWindow(QMainWindow):
         ssh_widget = ForensicWidget(
             on_back=self._show_home, on_show_help=self._show_help_from_tool,
             initial_case_id=case.get("case_id", ""), initial_examiner=case.get("examiner", ""),
-            initial_custodian=case.get("custodian", ""), initial_connection_method=connection_method,
+            initial_custodian=case.get("custodian", ""), initial_organization=case.get("organization", ""),
+            initial_connection_method=connection_method, display_timezone=self.display_timezone,
         )
         page_layout.addWidget(ssh_widget)
 
@@ -1451,7 +1493,8 @@ class ChameleonWindow(QMainWindow):
         ram_widget = RamEngineWidget(
             on_back=self._show_home, on_show_help=self._show_help_from_tool,
             initial_case_id=case.get("case_id", ""), initial_examiner=case.get("examiner", ""),
-            initial_custodian=case.get("custodian", ""),
+            initial_custodian=case.get("custodian", ""), initial_organization=case.get("organization", ""),
+            display_timezone=self.display_timezone,
         )
         page_layout.addWidget(ram_widget)
 

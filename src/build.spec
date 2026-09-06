@@ -57,6 +57,15 @@ a = Analysis(
         # script'in dogrudan importlarinda gorunmedigi icin PyInstaller
         # bunu otomatik bulamiyor.
         "PySide6.QtSvg",
+        # shared/tz_display.py (o da veri dosyasi olarak yuklenen shared/
+        # altinda) zoneinfo kullaniyor -- AYNI sinif sorun, aynen yukaridaki
+        # QtSvg gibi PyInstaller'in statik analizi bunu goremiyor. tzdata
+        # (IANA saat dilimi verisi) icin ayrica PyInstaller'in kendi
+        # hook-tzdata.py'si var, elle bir sey eklemeye gerek yok -- ama
+        # zoneinfo'nun KENDISI (stdlib) hic gorunmedigi icin hic
+        # PAKETLENMIYORDU ("No module named 'zoneinfo'" ile gercek bir
+        # exe'de patladi, bkz. docs/hatalar_ve_sonuclar.md).
+        "zoneinfo",
     ],
     hookspath=[],
     hooksconfig={},

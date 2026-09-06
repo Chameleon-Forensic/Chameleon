@@ -64,15 +64,20 @@ duruma göre değişir:
   alınması, bağlantı kopması/toparlanması, hash uyuşmazlığı, hangi ağ yolunun
   — doğrudan/VPN/Tor — kullanıldığı) zaman damgalı olarak bir günlük dosyasına
   yazılır.
-- **Vaka Bilgileri**: Vaka No, İnceleyen ve Cihaz Sahibi/Yetkili Kişi bilgisi
-  kaydedilebilir. Bu bilgiler **tamamen isteğe bağlıdır** — kendi rapor
-  sürecinizi kullanıyorsanız boş bırakılabilir.
+- **Vaka Bilgileri**: Vaka No, İnceleyen, Cihaz Sahibi/Yetkili Kişi ve
+  Organizasyon bilgisi kaydedilebilir. Bu bilgiler **tamamen isteğe
+  bağlıdır** — kendi rapor sürecinizi kullanıyorsanız boş bırakılabilir.
 - **Otomatik rapor**: Her işlem sonunda, vaka bilgileri, hedef bilgisi, hash,
   boyut, sonuç ve tam delil zinciri olay listesini içeren bir rapor
   (`report.json` + yazdırılabilir `report.html`) otomatik üretilir. İşlem
   bitince ekranda bir özet de gösterilir. Tam disk alımlarında kaynağın
   sadece yolu (`/dev/sdb` gibi) değil, gerçek disk modeli/seri numarası da
   rapora yazılır (kalıcı, benzersiz bir kaynak kimliği için).
+- **UTC yanında isteğe bağlı yerel saat gösterimi**: Ayarlar sayfasından
+  bir saat dilimi seçilirse, `report.html`'deki UTC zaman damgalarının
+  yanına "(UTC+03:00) Istanbul" gibi bir yerel saat karşılığı eklenir —
+  sadece okunabilirlik içindir, `report.json`'daki (kanıt niteliğindeki)
+  değer her zaman saf UTC kalır.
 - **Rapor bütünlüğü**: `report.json` kaydedilirken yanına bir `.sha256`
   dosyası da yazılır — raporun kendisinin sonradan değiştirilip
   değiştirilmediği bağımsız olarak kontrol edilebilir.

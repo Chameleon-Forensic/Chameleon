@@ -362,7 +362,10 @@ class AcquisitionWorker(QThread):
         if ForensicReport is None:
             return None
         c = self.ctx
-        report = ForensicReport(case_id=c["case_id"], examiner=c["examiner"], custodian=c["custodian"])
+        report = ForensicReport(
+            case_id=c["case_id"], examiner=c["examiner"], custodian=c["custodian"],
+            organization=c["organization"], display_timezone=self._display_timezone,
+        )
         report.start(engine=engine, method=method, connection_method=c["conn_method"], **kwargs)
         return report
 
@@ -904,7 +907,8 @@ class RemoteBrowseDialog(QDialog):
 # ---------------------------------------------------------------------------
 class ForensicWidget(QWidget):
     def __init__(self, on_back=None, on_show_help=None, initial_case_id="", initial_examiner="",
-                 initial_custodian="", initial_connection_method=None, parent=None):
+                 initial_custodian="", initial_organization="", initial_connection_method=None,
+                 display_timezone=None, parent=None):
         """
         initial_connection_method: launcher'dan hangi yontem sayfasi
         ("direct"/"vpn"/"tor") ile buraya girildiyse burada gelir. VERILDIYSE
@@ -927,6 +931,8 @@ class ForensicWidget(QWidget):
         self._initial_case_id = initial_case_id
         self._initial_examiner = initial_examiner
         self._initial_custodian = initial_custodian
+        self._initial_organization = initial_organization
+        self._display_timezone = display_timezone
         self._initial_connection_method = initial_connection_method
         self._method_locked = initial_connection_method is not None
 
@@ -993,6 +999,7 @@ class ForensicWidget(QWidget):
         self.entry_case_id = self._labeled_row(vaka.body, "Vaka No", self._initial_case_id)
         self.entry_examiner = self._labeled_row(vaka.body, "İnceleyen", self._initial_examiner)
         self.entry_custodian = self._labeled_row(vaka.body, "Cihaz Sahibi / Yetkili Kişi", self._initial_custodian)
+        self.entry_organization = self._labeled_row(vaka.body, "Organizasyon", self._initial_organization)
         body.addWidget(vaka)
 
         # === Baglanti Yontemi ===
@@ -1700,6 +1707,7 @@ class ForensicWidget(QWidget):
             "case_id": self.entry_case_id.text().strip(),
             "examiner": self.entry_examiner.text().strip(),
             "custodian": self.entry_custodian.text().strip(),
+            "organization": self.entry_organization.text().strip(),
             "conn_method": self.conn_method_value,
             "host": self.entry_host.text().strip(),
         }
@@ -1921,6 +1929,7 @@ class ForensicWidget(QWidget):
             ("Vaka No", d["case"]["case_id"] or "—"),
             ("İnceleyen", d["case"]["examiner"] or "—"),
             ("Cihaz Sahibi / Yetkili Kişi", d["case"]["custodian"] or "—"),
+            ("Organizasyon", d["case"]["organization"] or "—"),
             ("Hedef", d["acquisition"]["target_host"] or d["acquisition"]["source_identifier"] or "—"),
             ("Bağlantı Yöntemi", d["acquisition"]["connection_method"] or "—"),
             ("SHA-256", (image_hash[:24] + "…") if image_hash else "—"),

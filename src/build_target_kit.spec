@@ -40,6 +40,9 @@ a = Analysis(
         # gorunmedigi icin PyInstaller bunu otomatik bulamiyor (bkz.
         # build.spec'teki AYNI not).
         "PySide6.QtSvg",
+        # shared/tz_display.py'nin kullandigi zoneinfo (stdlib) icin AYNI
+        # sorun -- bkz. build.spec'teki not.
+        "zoneinfo",
     ],
     hookspath=[],
     hooksconfig={},

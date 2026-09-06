@@ -14,34 +14,40 @@ kısıtları burada.
 
 ```
 chameleon/
-├── engines/
-│   ├── ssh_engine/       # SSH tabanlı, Linux VE Windows hedefi destekler
-│   │   └── local_collector/  # gui_v2.py, image_acquirer.py, tor_client.py, socks5.py, vb.
-│   ├── ram_engine/       # Windows'ta yerel çalışan RAM imaj aracı (sadece derlenmiş hali, kaynak yok)
-│   └── portable_kit/     # Taşınabilir kit'in HEDEF cihazda çalışan Tor tarafı
-├── launcher/              # tek giriş noktası: sol sidebar navigasyon, splash ekranı
-├── shared/
-│   ├── theme.py           # ortak renk paleti (açık/koyu)
-│   ├── i18n/strings.py    # launcher'ın dil tablosu (TR/EN)
-│   ├── forensic_report.py # ortak rapor şeması (report.json + report.html + vaka geçmişi)
-│   ├── onion_auth.py      # Tor client-auth anahtar üretimi (x25519)
-│   ├── tor_binary.py      # gömülü Tor binary'sinin yolunu bulan ortak modül
-│   ├── version.py         # tek surum numarasi
-│   ├── assets/            # logo (chameleon_icon.png, chameleon.ico)
-│   └── bin/tor/windows/   # gömülü Tor binary'si (tor.exe)
-├── build.spec             # PyInstaller: tek Chameleon.exe üretir (operatör, tam paket)
-├── build_target_kit.spec  # PyInstaller: ChameleonHedefKiti.exe üretir (SADECE hedef-taraf, hafif)
+├── src/
+│   ├── engines/
+│   │   ├── ssh_engine/       # SSH tabanlı, Linux VE Windows hedefi destekler
+│   │   │   └── local_collector/  # gui_v2.py, image_acquirer.py, tor_client.py, socks5.py, vb.
+│   │   ├── ram_engine/       # Windows'ta yerel çalışan RAM imaj aracı (sadece derlenmiş hali, kaynak yok)
+│   │   └── portable_kit/     # Taşınabilir kit'in HEDEF cihazda çalışan Tor tarafı
+│   ├── launcher/              # tek giriş noktası: sol sidebar navigasyon, splash ekranı
+│   ├── shared/
+│   │   ├── theme.py           # ortak renk paleti (açık/koyu)
+│   │   ├── i18n/strings.py    # launcher'ın dil tablosu (TR/EN)
+│   │   ├── forensic_report.py # ortak rapor şeması (report.json + report.html + vaka geçmişi)
+│   │   ├── onion_auth.py      # Tor client-auth anahtar üretimi (x25519)
+│   │   ├── tor_binary.py      # gömülü Tor binary'sinin yolunu bulan ortak modül
+│   │   ├── tz_display.py      # UTC yaninda yerel saat gosterimi (sadece report.html)
+│   │   ├── version.py         # tek surum numarasi
+│   │   ├── assets/            # logo (chameleon_icon.png, chameleon.ico)
+│   │   └── bin/tor/windows/   # gömülü Tor binary'si (tor.exe)
+│   ├── build.spec             # PyInstaller: tek Chameleon.exe üretir (operatör, tam paket)
+│   └── build_target_kit.spec  # PyInstaller: ChameleonHedefKiti.exe üretir (SADECE hedef-taraf, hafif)
 └── docs/roadmap.md        # planlanan işler
 ```
+
+Tüm kod `src/` altında toplanıyor; `README.md`/`CONTRIBUTING.md`/
+`.gitignore`/`requirements.txt` gibi standart proje dosyaları GitHub
+konvansiyonuna uyması için kök dizinde kalıyor.
 
 `ssh_engine` artık hem Linux hem Windows hedefi destekliyor (bkz.
 aşağıdaki bölüm). `ram_engine` SSH gerektirmeden bu makinede çalışıyor —
 ikisi tek koda indirilemeyecek kadar farklı, bilinçli olarak ayrı
-tutuluyor. `launcher/chameleon_gui.py` hangisinin çalışacağını seçtiren
+tutuluyor. `src/launcher/chameleon_gui.py` hangisinin çalışacağını seçtiren
 ince bir katman; her yöntemin kendi tanıtım sayfasını da o dosyadaki
 `METHOD_INFO` sözlüğü barındırıyor.
 
-`ram_engine` hakkında bilmen gerekenler: `engines/ram_engine/docs/`
+`ram_engine` hakkında bilmen gerekenler: `src/engines/ram_engine/docs/`
 içinde zaten var, tekrar etmiyoruz — özellikle `USAGE.md` (CLI
 parametreleri) ve `PROJE_DOKUMANI.md` (mimari, IOCTL sözleşmesi, bilinen
 sınırlamalar) faydalı. Kısaca: `process` modu sürücü gerektirmez ve
@@ -75,9 +81,9 @@ signing + reboot gerektiriyor.
   türleri sabit isimlerle (`EXAM_START`, `BLOCK_ACQUIRED`,
   `CONNECTION_LOST`, `HASH_MISMATCH`, `TOR_CONNECTION_ESTABLISHED`,
   `VPN_CONNECTION_USED` vb.). Her işlem sonunda bu log,
-  `shared/forensic_report.py` tarafından vaka bilgileri, bütünlük ve
+  `src/shared/forensic_report.py` tarafından vaka bilgileri, bütünlük ve
   sonuç bilgisiyle birlikte `report.json` + yazdırılabilir `report.html`
-  olarak paketlenir; her rapor ayrıca `shared/data/case_history.json`
+  olarak paketlenir; her rapor ayrıca `src/shared/data/case_history.json`
   içindeki ortak vaka geçmişine de eklenir (launcher'daki "Vaka Geçmişi"
   sayfası bunu okur).
 
@@ -96,31 +102,30 @@ signing + reboot gerektiriyor.
   `ONION_CLIENT_AUTH_ADD` ile özel anahtarı tanıtır; `socks5.py` paramiko'yu
   `.onion` adresine bağlamak için elle yazılmış minimal bir SOCKS5
   istemcisidir (PySocks gibi ek bağımlılık yok). Gömülü Tor binary'si
-  `shared/bin/tor/windows/tor.exe` — yolu koda gömülü değil,
-  `shared/tor_binary.py` üzerinden bulunuyor (`CHAMELEON_TOR_BINARY` ortam
-  değişkeniyle override edilebilir).
+  `src/shared/bin/tor/windows/tor.exe` — yolu koda gömülü değil,
+  `src/shared/tor_binary.py` üzerinden bulunuyor (`CHAMELEON_TOR_BINARY`
+  ortam değişkeniyle override edilebilir).
 
 ## Tek exe paketleme (PyInstaller)
 
-`pyinstaller build.spec` → `dist/Chameleon.exe`. `gui_v2.py`/`ram_gui.py`
-gibi modüller derleme zamanında değil ÇALIŞMA ZAMANINDA `sys.path`'e
-eklenip `import` ediliyor (bkz. `chameleon_gui.py` `_show_ssh_engine`/
-`_show_ram_engine`) — bu yüzden PyInstaller'ın statik analizi onların
-bağımlılıklarını (özellikle `tkinter.scrolledtext/messagebox/filedialog`
-gibi alt modülleri) OTOMATİK GÖREMEZ. `build.spec`'teki `hiddenimports`
-listesi bunu telafi ediyor; yeni bir tkinter alt modülü ya da üçüncü
-parti kütüphane eklenirse orası da güncellenmeli. Detaylar ve karşılaşılan
-hatalar için: [docs/hatalar_ve_sonuclar.md](docs/hatalar_ve_sonuclar.md),
-genel teknik dersler için [docs/ogrenilenler.md](docs/ogrenilenler.md).
+`cd src && pyinstaller build.spec` → `src/dist/Chameleon.exe`.
+`gui_v2.py`/`ram_gui.py` gibi modüller derleme zamanında değil ÇALIŞMA
+ZAMANINDA `sys.path`'e eklenip `import` ediliyor (bkz. `chameleon_gui.py`
+`_show_ssh_engine`/`_show_ram_engine`) — bu yüzden PyInstaller'ın statik
+analizi onların bağımlılıklarını (özellikle
+`tkinter.scrolledtext/messagebox/filedialog` gibi alt modülleri)
+OTOMATİK GÖREMEZ. `build.spec`'teki `hiddenimports` listesi bunu telafi
+ediyor; yeni bir tkinter alt modülü ya da üçüncü parti kütüphane
+eklenirse orası da güncellenmeli.
 
-Ayrıca `pyinstaller build_target_kit.spec` → `dist/ChameleonHedefKiti.exe`:
-sahaya götürülecek, SADECE hedef-taraf (Bu Cihaz İnceleniyor) modunu
-içeren, operatör araçları (SSH/RAM motorları, dolayısıyla `paramiko`)
-hiç paketlenmemiş ayrı bir derleme. Giriş noktası `launcher/
-target_kit_main.py` — `CHAMELEON_TARGET_ONLY` ortam değişkenini
-`chameleon_gui` import edilmeden önce ayarlar, `ChameleonWindow` bunu
-görünce rol seçim ekranını atlayıp doğrudan hedef sihirbazını açar.
-Aynı `chameleon_gui.py` kullanılır, kod tekrarlanmaz.
+Ayrıca `cd src && pyinstaller build_target_kit.spec` →
+`src/dist/ChameleonHedefKiti.exe`: sahaya götürülecek, SADECE hedef-taraf
+(Bu Cihaz İnceleniyor) modunu içeren, operatör araçları (SSH/RAM
+motorları, dolayısıyla `paramiko`) hiç paketlenmemiş ayrı bir derleme.
+Giriş noktası `src/launcher/target_kit_main.py` — `CHAMELEON_TARGET_ONLY`
+ortam değişkenini `chameleon_gui` import edilmeden önce ayarlar,
+`ChameleonWindow` bunu görünce rol seçim ekranını atlayıp doğrudan hedef
+sihirbazını açar. Aynı `chameleon_gui.py` kullanılır, kod tekrarlanmaz.
 
 ## Test yaklaşımı
 
