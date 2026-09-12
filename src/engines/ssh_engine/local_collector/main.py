@@ -205,7 +205,7 @@ def main():
             resume_state = None
             start_block = 0
 
-            mevcut_manifest = image_acquirer.find_incomplete_manifest(target_disk)
+            mevcut_manifest = image_acquirer.find_incomplete_manifest(target_disk, host=ssh.host)
             if mevcut_manifest:
                 manifest_path, resume_state = mevcut_manifest
                 cevap = input(
@@ -231,6 +231,7 @@ def main():
                 start_block=start_block,
                 resume_state=resume_state,
                 manifest_path=manifest_path,
+                host=ssh.host,
             )
 
             # Baglanti tamamen kesilirse acquire_disk_image "resume_from" ile
@@ -258,6 +259,7 @@ def main():
                     start_block=sonuc["resume_from"],
                     resume_state=sonuc,
                     manifest_path=sonuc.get("manifest_path"),
+                    host=ssh.host,
                 )
 
             if sonuc is None:

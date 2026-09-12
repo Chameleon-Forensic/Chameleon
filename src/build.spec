@@ -30,6 +30,7 @@ Cikti: dist/Chameleon.exe (tek dosya -- Tor binary + stem + cryptography +
 PySide6 + paramiko hepsi gomulu).
 """
 import os
+from PyInstaller.utils.hooks import collect_submodules, collect_data_files
 
 ROOT = os.path.abspath(SPECPATH)
 
@@ -41,6 +42,15 @@ datas = [
     (os.path.join(ROOT, "engines", "ram_engine", "driver"), "engines/ram_engine/driver"),
     (os.path.join(ROOT, "engines", "portable_kit", "tor_manager.py"), "engines/portable_kit"),
 ]
+# shared/forensic_report.py'nin export_pdf()'i (veri dosyasi olarak
+# yuklenen shared/ altinda, AYNI zoneinfo/html sinifi sorun) reportlab'i
+# fonksiyon icinde YEREL import ediyor -- PyInstaller bunu hic goremiyor.
+# reportlab karmasik bir paket (cok sayida alt modul + Type1 font metrik
+# verisi) oldugu icin tek tek hiddenimports yazmak yerine, projenin
+# customtkinter icin daha once kullandigi AYNI collect_submodules/
+# collect_data_files yontemiyle tum paket toplaniyor.
+reportlab_hiddenimports = collect_submodules("reportlab")
+datas += collect_data_files("reportlab")
 
 a = Analysis(
     [os.path.join(ROOT, "launcher", "chameleon_gui.py")],
@@ -66,7 +76,12 @@ a = Analysis(
         # PAKETLENMIYORDU ("No module named 'zoneinfo'" ile gercek bir
         # exe'de patladi, bkz. docs/hatalar_ve_sonuclar.md).
         "zoneinfo",
-    ],
+        # shared/forensic_report.py (o da veri dosyasi olarak yuklenen
+        # shared/ altinda) HTML rapor uretirken html.escape() icin stdlib
+        # html modulunu kullaniyor -- AYNI sinif sorun (yukaridaki zoneinfo
+        # notuna bkz.): gercek exe'de "No module named 'html'" ile patladi.
+        "html",
+    ] + reportlab_hiddenimports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

@@ -43,6 +43,9 @@ a = Analysis(
         # shared/tz_display.py'nin kullandigi zoneinfo (stdlib) icin AYNI
         # sorun -- bkz. build.spec'teki not.
         "zoneinfo",
+        # shared/forensic_report.py'nin kullandigi html (stdlib) icin AYNI
+        # sorun -- bkz. build.spec'teki not.
+        "html",
     ],
     hookspath=[],
     hooksconfig={},

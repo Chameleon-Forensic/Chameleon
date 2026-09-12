@@ -405,6 +405,109 @@ def hash_file(
     )
 
 
+def hash_file_multi(
+    path: PathLike,
+    *,
+    algorithms=("sha256", "md5", "sha1"),
+    progress: Optional[ProgressCallback] = None,
+    buffer_size: int = READ_BUFFER_SIZE,
+) -> dict:
+    """
+    hash_file() ile AYNI mantik, ama dosyayi TEK GECISTE birden fazla
+    algoritmayla ozetler -- SHA-256 (birincil butunluk degeri) + MD5/SHA-1
+    (bazi kurumsal rapor sablonlarinin bekledigi ek/uyumluluk alanlari)
+    ayri ayri okuma gerektirmesin diye eklendi. Onceden ForensicReport.finish()
+    SHA-256 zaten hesaplandiktan SONRA dosyayi MD5/SHA-1 icin IKINCI KEZ
+    bastan sona okuyordu -- buyuk bir disk imajinda (100+ GB) bu, imaj alma
+    suresini neredeyse ikiye katliyordu (bkz. docs/hatalar_ve_sonuclar.md).
+
+    FIPS uyumlu OpenSSL derlemelerinde hashlib.new("md5"/"sha1") ValueError
+    firlatabilir -- boyle bir algoritma icin sozlukte deger olmaz (o
+    algoritma sessizce atlanir), diger algoritmalar etkilenmez.
+
+    Donus: {"sha256": "...", "md5": "...", "sha1": "..."} gibi bir sozluk
+    (istenip de hesaplanamayan algoritmalar sozlukte hic yer almaz).
+
+    Raises:
+        FileNotFoundError: dosya yoksa.
+    """
+    path = Path(path)
+    if not path.is_file():
+        raise FileNotFoundError(f"Dosya bulunamadi: {path}")
+
+    total = path.stat().st_size
+    hashers = {}
+    for alg in algorithms:
+        try:
+            hashers[alg] = hashlib.new(alg)
+        except ValueError:
+            pass
+
+    processed = 0
+    with path.open("rb") as handle:
+        while True:
+            block = handle.read(buffer_size)
+            if not block:
+                break
+            for hasher in hashers.values():
+                hasher.update(block)
+            processed += len(block)
+            if progress is not None:
+                progress(processed, total)
+
+    return {alg: hasher.hexdigest() for alg, hasher in hashers.items()}
+
+
+def hash_files_multi(
+    paths,
+    *,
+    algorithms=("sha256", "md5", "sha1"),
+    progress: Optional[ProgressCallback] = None,
+    buffer_size: int = READ_BUFFER_SIZE,
+) -> dict:
+    """
+    hash_file_multi() ile AYNI mantik, ama TEK bir dosya yerine SIRALI
+    birden fazla dosyayi (parcalanmis/segmentli imaj -- image_acquirer.
+    write_segments()'in urettigi .001/.002/... dosyalari) TEK bir mantiksal
+    akis gibi ozetler. Sonuc, parcalar TEK bir dosyada birlestirilmis
+    olsaydi elde edilecek hash ile BIREBIR AYNIDIR -- boylece parcali bir
+    imajin da "butun" bir imaj gibi tek bir master hash'i olabilir.
+
+    paths SIRALI verilmelidir (orn. [".001", ".002", ".003"]) -- yanlis
+    sirada verilirse hash de yanlis (ama tutarli sekilde yanlis) cikar.
+
+    Raises:
+        FileNotFoundError: paths'teki herhangi bir dosya yoksa.
+    """
+    resolved = [Path(p) for p in paths]
+    for p in resolved:
+        if not p.is_file():
+            raise FileNotFoundError(f"Dosya bulunamadi: {p}")
+
+    total = sum(p.stat().st_size for p in resolved)
+    hashers = {}
+    for alg in algorithms:
+        try:
+            hashers[alg] = hashlib.new(alg)
+        except ValueError:
+            pass
+
+    processed = 0
+    for p in resolved:
+        with p.open("rb") as handle:
+            while True:
+                block = handle.read(buffer_size)
+                if not block:
+                    break
+                for hasher in hashers.values():
+                    hasher.update(block)
+                processed += len(block)
+                if progress is not None:
+                    progress(processed, total)
+
+    return {alg: hasher.hexdigest() for alg, hasher in hashers.items()}
+
+
 def iter_chunk_digests(
     path: PathLike,
     *,

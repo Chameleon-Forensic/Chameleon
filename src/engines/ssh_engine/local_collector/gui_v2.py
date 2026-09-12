@@ -107,8 +107,10 @@ try:
         acquire_disk_image,
         concatenate_blocks,
         compress_image,
-        local_master_hash,
+        write_segments,
         find_incomplete_manifest,
+        find_incomplete_tree_manifest,
+        delete_manifest,
         get_disk_description,
     )
     from file_acquirer import acquire_remote_tree, list_remote_directory
@@ -118,7 +120,7 @@ try:
         list_remote_directory_windows,
         get_disk_description_windows,
     )
-    from hash_verifier import verify_file, HashMismatchError, HashError
+    from hash_verifier import verify_file, HashMismatchError, HashError, hash_file_multi, hash_files_multi
     import chain_of_custody as coc
     import tor_client
     PARAMIKO_OK = True
@@ -387,6 +389,7 @@ class AcquisitionWorker(QThread):
             c["disk"], c["out_path"], c["mode"], c["password"], c["block_size_mb"],
         )
         compress = c.get("compress", False)
+        segment_size_bytes = c.get("segment_size_bytes")
         try:
             disk_description = get_disk_description(self.ssh, disk)
         except Exception:
@@ -403,7 +406,7 @@ class AcquisitionWorker(QThread):
             resume_state = None
             start_block = 0
 
-            mevcut = find_incomplete_manifest(disk)
+            mevcut = find_incomplete_manifest(disk, host=c["host"])
             if mevcut:
                 manifest_path, resume_state = mevcut
                 completed = len(resume_state.get("acquired_blocks", []))
@@ -416,20 +419,41 @@ class AcquisitionWorker(QThread):
                 if devam:
                     start_block = completed
                 else:
+                    # Reddedilen manifest diskte birakilirsa "Yarim Kalanlar"
+                    # listesinde SONSUZA KADAR (silinecek bir yolu olmadan)
+                    # gorunmeye devam ederdi (kullanici bildirdi) -- kullanici
+                    # zaten "hayir, bununla ilgilenmiyorum" dedigi icin burada
+                    # temizliyoruz.
+                    delete_manifest(manifest_path)
                     manifest_path = None
                     resume_state = None
 
             apply_wb = (mode == "offline")
+            # bkz. Windows disk kolundaki AYNI duzeltme -- start_block > 0
+            # (gercek bir resume) ise acquire_disk_image write-block'u bu
+            # calistirmada TEKRAR UYGULAMAZ (sadece GERCEK durumu kontrol
+            # edip delil zincirine kaydeder), ama rapor eskiden hep sabit
+            # apply_wb/"Offline Acquisition" yaziyordu -- write-block
+            # GERCEKTEN uygulanmadigi halde uygulandigini iddia ediyordu.
             if report:
-                report.set_write_blocking(
-                    apply_wb,
-                    "Offline Acquisition" if apply_wb else (
-                        "Live Acquisition -- disk aktif kullanimda, kilitlenmedi. "
-                        "Bloklar bir sureye yayilarak okundugu icin imaj, diskin "
-                        "TEK bir anina degil, alma suresince degisebilecek bir "
-                        "durumuna karsilik gelebilir."
-                    ),
-                )
+                if start_block > 0:
+                    report.set_write_blocking(
+                        None,
+                        "Devam eden (resume) işlem -- bu çalıştırmada write-block "
+                        "yeniden UYGULANMADI, sadece GERÇEK durum kontrol edilip "
+                        "delil zincirine kaydedildi -- kesin sonuç için chain of "
+                        "custody olay listesine bakın.",
+                    )
+                else:
+                    report.set_write_blocking(
+                        apply_wb,
+                        "Offline Acquisition" if apply_wb else (
+                            "Live Acquisition -- disk aktif kullanimda, kilitlenmedi. "
+                            "Bloklar bir sureye yayilarak okundugu icin imaj, diskin "
+                            "TEK bir anina degil, alma suresince degisebilecek bir "
+                            "durumuna karsilik gelebilir."
+                        ),
+                    )
 
             sonuc = acquire_disk_image(
                 self.ssh, disk, password,
@@ -438,6 +462,7 @@ class AcquisitionWorker(QThread):
                 apply_write_blocker=apply_wb,
                 total_blocks=resume_state["total_blocks"] if resume_state else None,
                 start_block=start_block, resume_state=resume_state, manifest_path=manifest_path,
+                host=c["host"],
             )
 
             while sonuc is not None and "resume_from" in sonuc:
@@ -458,6 +483,7 @@ class AcquisitionWorker(QThread):
                     apply_write_blocker=apply_wb, total_blocks=sonuc["total_blocks"],
                     start_block=sonuc["resume_from"], resume_state=sonuc,
                     manifest_path=sonuc.get("manifest_path"),
+                    host=c["host"],
                 )
 
             if sonuc is None:
@@ -479,27 +505,55 @@ class AcquisitionWorker(QThread):
                 self.log.emit("[BİLGİ] İşlem yarım kaldı. Daha sonra aynı diski seçip devam edebilirsiniz.", None)
                 return
 
-            self.log.emit("\n[+] Bloklar birleştiriliyor...", "info")
-            imaj_yolu = concatenate_blocks(
-                sonuc["block_paths"], sonuc["total_blocks"],
-                output_dir=sonuc["output_dir"], output_path=out_path, cleanup=(mode != "live"),
-            )
-            if imaj_yolu is None:
-                if report:
-                    report.finish(
-                        status="failed", output_path=out_path,
-                        failed_items=[str(b) for b in sonuc.get("failed_blocks", [])],
-                    )
-                    self._save_report(report, sonuc.get("output_dir") or os.path.dirname(out_path) or ".")
-                self.log.emit("[HATA] Eksik bloklar nedeniyle imaj birleştirilemedi.", None)
-                return
+            segments = None
+            if segment_size_bytes:
+                self.log.emit("\n[+] Bloklar segmentlere bölünüyor...", "info")
+                segments = write_segments(
+                    sonuc["block_paths"], sonuc["total_blocks"], segment_size_bytes,
+                    output_dir=sonuc["output_dir"],
+                    output_basename=os.path.splitext(os.path.basename(out_path))[0],
+                    cleanup=(mode != "live"),
+                )
+                if segments is None:
+                    if report:
+                        report.finish(
+                            status="failed", output_path=out_path,
+                            failed_items=[str(b) for b in sonuc.get("failed_blocks", [])],
+                        )
+                        self._save_report(report, sonuc.get("output_dir") or os.path.dirname(out_path) or ".")
+                    self.log.emit("[HATA] Eksik bloklar nedeniyle segmentli imaj oluşturulamadı.", None)
+                    return
+                imaj_yolu = segments[0]
+                self.log.emit(f"[BAŞARILI] İmaj {len(segments)} segmente bölündü: {imaj_yolu} (+{len(segments) - 1} diğer)", None)
+                hashes = hash_files_multi(segments)
+            else:
+                self.log.emit("\n[+] Bloklar birleştiriliyor...", "info")
+                imaj_yolu = concatenate_blocks(
+                    sonuc["block_paths"], sonuc["total_blocks"],
+                    output_dir=sonuc["output_dir"], output_path=out_path, cleanup=(mode != "live"),
+                )
+                if imaj_yolu is None:
+                    if report:
+                        report.finish(
+                            status="failed", output_path=out_path,
+                            failed_items=[str(b) for b in sonuc.get("failed_blocks", [])],
+                        )
+                        self._save_report(report, sonuc.get("output_dir") or os.path.dirname(out_path) or ".")
+                    self.log.emit("[HATA] Eksik bloklar nedeniyle imaj birleştirilemedi.", None)
+                    return
 
-            self.log.emit(f"[BAŞARILI] İmaj birleştirildi: {imaj_yolu}", None)
-            master_hash = local_master_hash(imaj_yolu)
+                self.log.emit(f"[BAŞARILI] İmaj birleştirildi: {imaj_yolu}", None)
+                # SHA-256 + MD5 + SHA-1 TEK okuma gecisinde birlikte hesaplanir
+                # (bkz. forensic_report.finish()'teki AYNI gerekce) -- sikistirma
+                # varsa bile bu HAM (henuz sikistirilmamis) icerik uzerinde
+                # yapilir, cunku rapordaki butunluk degeri her zaman ham
+                # icerige ait kalmali.
+                hashes = hash_file_multi(imaj_yolu)
+            master_hash = hashes.get("sha256")
             self.log.emit(f"[+] Yerel master SHA-256: {master_hash}", "info")
-            raw_bytes = os.path.getsize(imaj_yolu)
+            raw_bytes = sum(os.path.getsize(s) for s in segments) if segments else os.path.getsize(imaj_yolu)
 
-            if compress:
+            if compress and not segments:
                 self.log.emit("[i] İmaj gzip ile sıkıştırılıyor (bu biraz sürebilir)...", "info")
                 onceki_yol = imaj_yolu
                 imaj_yolu = compress_image(imaj_yolu, remove_original=True)
@@ -523,6 +577,7 @@ class AcquisitionWorker(QThread):
                 report.finish(
                     status="success" if not sonuc.get("failed_blocks") else "partial",
                     output_path=imaj_yolu, image_hash=master_hash,
+                    md5_hash=hashes.get("md5"), sha1_hash=hashes.get("sha1"),
                     total_bytes=raw_bytes, chunk_size_bytes=bs * 1024 * 1024,
                     chunk_count=len(sonuc.get("acquired_blocks", [])),
                     failed_items=[str(b) for b in sonuc.get("failed_blocks", [])],
@@ -530,7 +585,14 @@ class AcquisitionWorker(QThread):
                 rapor_yolu = self._save_report(report, os.path.dirname(imaj_yolu) or ".")
                 self.report_ready.emit(report, rapor_yolu)
 
-            if compress:
+            if segments:
+                self.log.emit(
+                    "[i] İmaj segmentlere bölündüğü için otomatik doğrulama atlandı -- "
+                    "gerekirse verify_report.py ile bağımsız doğrulayabilirsiniz "
+                    "(ilk segmenti verin, diğerleri otomatik bulunur).",
+                    "info",
+                )
+            elif compress:
                 self.log.emit(
                     "[i] İmaj sıkıştırıldığı için otomatik doğrulama atlandı -- "
                     "gerekirse verify_report.py ile bağımsız doğrulayabilirsiniz.",
@@ -560,6 +622,7 @@ class AcquisitionWorker(QThread):
             c["disk_number"], c["out_path"], c["mode"], c["block_size_mb"],
         )
         compress = c.get("compress", False)
+        segment_size_bytes = c.get("segment_size_bytes")
         try:
             disk_description = get_disk_description_windows(self.ssh, disk_number)
         except Exception:
@@ -571,25 +634,78 @@ class AcquisitionWorker(QThread):
         )
         try:
             apply_wb = (mode == "offline")
-            if report:
-                report.set_write_blocking(
-                    apply_wb,
-                    "Offline Acquisition" if apply_wb else (
-                        "Live Acquisition -- disk aktif kullanimda, kilitlenmedi. "
-                        "Bloklar bir sureye yayilarak okundugu icin imaj, diskin "
-                        "TEK bir anina degil, alma suresince degisebilecek bir "
-                        "durumuna karsilik gelebilir."
-                    ),
-                )
 
             def ilerleme(done, total):
                 pct = (done * 100 / total) if total else 0
                 self.progress.emit(pct)
                 self.status.emit(f"İlerleme: %{pct:.0f} ({done}/{total} blok)")
 
+            # bkz. Linux disk kolundaki AYNI kontrol -- Windows tarafinda
+            # bu hic yapilmiyordu (gercek bir eksiklik, kullanici bildirdi):
+            # uygulama tamamen kapanip acilsa bile disktekilerden yarim
+            # kalan bir islem varsa devam etmeyi teklif ediyor.
+            manifest_path = None
+            resume_state0 = None
+            start_block0 = 0
+            mevcut = find_incomplete_manifest(f"PhysicalDrive{disk_number}", host=c["host"])
+            if mevcut:
+                manifest_path, resume_state0 = mevcut
+                completed = len(resume_state0.get("acquired_blocks", []))
+                total = resume_state0.get("total_blocks", 0)
+                self.log.emit(f"[UYARI] Yarım kalan işlem bulundu: {completed}/{total} blok tamamlanmış.", None)
+                devam = self._ask_yesno_blocking(
+                    "Yarım Kalan İşlem",
+                    f"Bu disk için yarım kalan bir işlem bulundu.\nTamamlanan: {completed}/{total} blok\nDevam edilsin mi?",
+                )
+                if devam:
+                    start_block0 = completed
+                else:
+                    # bkz. Linux disk kolundaki AYNI duzeltme -- reddedilen
+                    # manifest silinmezse "Yarim Kalanlar" listesinde
+                    # sonsuza kadar kalirdi.
+                    delete_manifest(manifest_path)
+                    manifest_path = None
+                    resume_state0 = None
+
+            # set_write_blocking() BURADA, resume kontrolunden SONRA cagirilir --
+            # onceden resume kontrolunden ONCE cagiriliyordu, bu yuzden bir
+            # resume kabul edildiginde acquire_disk_image_windows'a GERCEKTE
+            # apply_write_blocker=False gecmesine ragmen rapor hala eski
+            # apply_wb/"Offline Acquisition" degerini tasiyordu -- rapor,
+            # write-block GERCEKTEN uygulanmadigi halde uygulandigini iddia
+            # ediyordu (kullanici bildirdi, bkz. docs/hatalar_ve_sonuclar.md).
+            # start_block0 > 0 (gercek bir resume) ise, write-block bu
+            # calistirmada TEKRAR uygulanmiyor -- acquire_disk_image_windows
+            # zaten bu durumda GERCEK durumu (is_write_blocked_windows ile)
+            # kontrol edip delil zincirine ayrica kaydediyor; rapor da bunu
+            # acikca yansitir, "uygulandi" diye YANLIS bir iddiada bulunmaz.
+            if report:
+                if start_block0 > 0:
+                    report.set_write_blocking(
+                        None,
+                        "Devam eden (resume) işlem -- bu çalıştırmada write-block "
+                        "yeniden UYGULANMADI, sadece GERÇEK durum kontrol edilip "
+                        "delil zincirine kaydedildi -- kesin sonuç için chain of "
+                        "custody olay listesine bakın.",
+                    )
+                else:
+                    report.set_write_blocking(
+                        apply_wb,
+                        "Offline Acquisition" if apply_wb else (
+                            "Live Acquisition -- disk aktif kullanimda, kilitlenmedi. "
+                            "Bloklar bir sureye yayilarak okundugu icin imaj, diskin "
+                            "TEK bir anina degil, alma suresince degisebilecek bir "
+                            "durumuna karsilik gelebilir."
+                        ),
+                    )
+
             sonuc = acquire_disk_image_windows(
                 self.ssh, disk_number, output_dir=os.path.dirname(out_path) or ".",
-                block_size_mb=block_size_mb, apply_write_blocker=apply_wb, progress_callback=ilerleme,
+                block_size_mb=resume_state0["block_size_mb"] if resume_state0 else block_size_mb,
+                apply_write_blocker=apply_wb,
+                total_blocks=resume_state0["total_blocks"] if resume_state0 else None,
+                start_block=start_block0, resume_state=resume_state0, manifest_path=manifest_path,
+                progress_callback=ilerleme, host=c["host"],
             )
 
             while sonuc is not None and "resume_from" in sonuc:
@@ -608,6 +724,7 @@ class AcquisitionWorker(QThread):
                     block_size_mb=sonuc.get("block_size_mb", block_size_mb), apply_write_blocker=False,
                     total_blocks=sonuc["total_blocks"], start_block=sonuc["resume_from"],
                     resume_state=sonuc, manifest_path=sonuc.get("manifest_path"), progress_callback=ilerleme,
+                    host=c["host"],
                 )
 
             if sonuc is None:
@@ -645,11 +762,17 @@ class AcquisitionWorker(QThread):
                 return
 
             self.log.emit(f"[BAŞARILI] İmaj birleştirildi: {imaj_yolu}", None)
-            master_hash = local_master_hash(imaj_yolu)
+            # SHA-256 + MD5 + SHA-1 TEK okuma gecisinde birlikte hesaplanir
+            # (bkz. forensic_report.finish()'teki AYNI gerekce) -- sikistirma
+            # varsa bile bu HAM (henuz sikistirilmamis) icerik uzerinde
+            # yapilir, cunku rapordaki butunluk degeri her zaman ham
+            # icerige ait kalmali.
+            hashes = hash_file_multi(imaj_yolu)
+            master_hash = hashes.get("sha256")
             self.log.emit(f"[+] Yerel master SHA-256: {master_hash}", "info")
             raw_bytes = os.path.getsize(imaj_yolu)
 
-            if compress:
+            if compress and not segments:
                 self.log.emit("[i] İmaj gzip ile sıkıştırılıyor (bu biraz sürebilir)...", "info")
                 onceki_yol = imaj_yolu
                 imaj_yolu = compress_image(imaj_yolu, remove_original=True)
@@ -673,6 +796,7 @@ class AcquisitionWorker(QThread):
                 report.finish(
                     status="success" if not sonuc.get("failed_blocks") else "partial",
                     output_path=imaj_yolu, image_hash=master_hash,
+                    md5_hash=hashes.get("md5"), sha1_hash=hashes.get("sha1"),
                     total_bytes=raw_bytes, chunk_size_bytes=bs * 1024 * 1024,
                     chunk_count=len(sonuc.get("acquired_blocks", [])),
                     failed_items=[str(b) for b in sonuc.get("failed_blocks", [])],
@@ -680,7 +804,14 @@ class AcquisitionWorker(QThread):
                 rapor_yolu = self._save_report(report, os.path.dirname(imaj_yolu) or ".")
                 self.report_ready.emit(report, rapor_yolu)
 
-            if compress:
+            if segments:
+                self.log.emit(
+                    "[i] İmaj segmentlere bölündüğü için otomatik doğrulama atlandı -- "
+                    "gerekirse verify_report.py ile bağımsız doğrulayabilirsiniz "
+                    "(ilk segmenti verin, diğerleri otomatik bulunur).",
+                    "info",
+                )
+            elif compress:
                 self.log.emit(
                     "[i] İmaj sıkıştırıldığı için otomatik doğrulama atlandı -- "
                     "gerekirse verify_report.py ile bağımsız doğrulayabilirsiniz.",
@@ -709,10 +840,37 @@ class AcquisitionWorker(QThread):
                 self.progress.emit(pct)
                 self.status.emit(f"{done}/{total} dosya alındı (%{pct:.0f})")
 
+            # bkz. disk imajlama kolundaki AYNI kontrol (docs/roadmap.md
+            # madde 0.4) -- uygulama tamamen kapanip acilsa bile disktekilerden
+            # bu klasor/dosya icin yarim kalan bir islem varsa devam etmeyi
+            # teklif ediyor.
+            tree_manifest_path = None
+            tree_resume_state = None
+            mevcut_tree = find_incomplete_tree_manifest(remote_path, host=c["host"])
+            if mevcut_tree:
+                tree_manifest_path, tree_resume_state = mevcut_tree
+                completed = len(tree_resume_state.get("acquired_files", []))
+                total = tree_resume_state.get("total_files", 0)
+                self.log.emit(f"[UYARI] Yarım kalan işlem bulundu: {completed}/{total} dosya tamamlanmış.", None)
+                devam = self._ask_yesno_blocking(
+                    "Yarım Kalan İşlem",
+                    f"Bu dosya/klasör için yarım kalan bir işlem bulundu.\nTamamlanan: {completed}/{total} dosya\nDevam edilsin mi?",
+                )
+                if not devam:
+                    delete_manifest(tree_manifest_path)
+                    tree_manifest_path = None
+                    tree_resume_state = None
+
             if target_os == "windows":
-                manifest = acquire_remote_tree_windows(self.ssh, remote_path, out_dir, progress_callback=ilerleme)
+                manifest = acquire_remote_tree_windows(
+                    self.ssh, remote_path, out_dir, progress_callback=ilerleme,
+                    manifest_path=tree_manifest_path, resume_state=tree_resume_state, host=c["host"],
+                )
             else:
-                manifest = acquire_remote_tree(self.ssh, remote_path, out_dir, password=password, progress_callback=ilerleme)
+                manifest = acquire_remote_tree(
+                    self.ssh, remote_path, out_dir, password=password, progress_callback=ilerleme,
+                    manifest_path=tree_manifest_path, resume_state=tree_resume_state, host=c["host"],
+                )
 
             if manifest is None:
                 if report:
@@ -992,6 +1150,15 @@ class ForensicWidget(QWidget):
         outer.addWidget(scroll, stretch=1)
 
         # === Vaka Bilgileri ===
+        # launcher icinden aciliyorsa (on_back doluysa, ki her zaman boyle)
+        # vaka bilgileri zaten ayri bir on-ekranda (chameleon_gui.py.
+        # _show_case_info) bir kez toplanip initial_* olarak buraya
+        # geciriliyor -- kart burada TEKRAR gosterilirse ayni alanlar iki kez
+        # sorulmus gibi kafa karistiriyordu (kullanici bildirdi, ayni sorun
+        # ram_gui.py'de de vardi, oradaki AYNI desenle duzeltildi). Alanlar
+        # (entry_case_id vb.) worker'in okuyabilmesi icin yine olusturuluyor,
+        # sadece ekranda GORUNMUYOR. Standalone calistirmada (on_back yok)
+        # kart gorunur kalir -- tek vaka bilgisi girisi orasi.
         vaka = widgets.Card("Vaka Bilgileri")
         note = QLabel("(İsteğe bağlı -- rapor üretmiyorsanız boş bırakabilirsiniz)")
         note.setStyleSheet(f"color:{ui.TEXT_SECONDARY}; font-family:'{ui.FONT_UI}'; font-size:{ui.SIZE_HELPER}px; font-style:italic;")
@@ -1000,6 +1167,8 @@ class ForensicWidget(QWidget):
         self.entry_examiner = self._labeled_row(vaka.body, "İnceleyen", self._initial_examiner)
         self.entry_custodian = self._labeled_row(vaka.body, "Cihaz Sahibi / Yetkili Kişi", self._initial_custodian)
         self.entry_organization = self._labeled_row(vaka.body, "Organizasyon", self._initial_organization)
+        if self.on_back:
+            vaka.hide()
         body.addWidget(vaka)
 
         # === Baglanti Yontemi ===
@@ -1189,6 +1358,28 @@ class ForensicWidget(QWidget):
         disk_row3.addWidget(self.combo_block_size)
         disk_row3.addStretch()
         self.disk_card.body.addLayout(disk_row3)
+
+        # Buyuk bir imaji FAT32 (4 GB dosya siniri) gibi sabit boyutlu bir
+        # hedefe tasinabilir kilmak icin -- FTK Imager'in "Raw (dd) -
+        # split" ciktisindaki AYNI .001/.002/... adlandirmasi (bkz.
+        # image_acquirer.write_segments()). Varsayilan "Bölme Yok" --
+        # segmentli cikti, tek dosyaya gore ekstra bir adim oldugu icin
+        # sadece gercekten gerektiginde acikca secilmeli.
+        disk_row4 = QHBoxLayout()
+        disk_row4.addWidget(QLabel("Segment Boyutu:"))
+        self.combo_segment_size = QComboBox()
+        self.combo_segment_size.addItem("Bölme Yok (Tek Dosya)", None)
+        self.combo_segment_size.addItem("650 MB (CD)", 650 * 1024 * 1024)
+        self.combo_segment_size.addItem("2 GB (FAT32 için önerilen)", 2 * 1024 * 1024 * 1024)
+        self.combo_segment_size.addItem("4 GB (FAT32 sınırı)", 4 * 1000 * 1000 * 1000)
+        self.combo_segment_size.setStyleSheet(f"""
+            QComboBox {{ background-color:{ui.BG_LAYER2}; color:{ui.TEXT_MAIN};
+                border:1px solid {ui.BORDER}; border-radius:{ui.RADIUS}px; padding:4px 8px; }}
+        """)
+        disk_row4.addWidget(self.combo_segment_size)
+        disk_row4.addStretch()
+        self.disk_card.body.addLayout(disk_row4)
+        self.combo_segment_size.currentIndexChanged.connect(self._on_mode_change)
 
         # Sadece Offline Acquisition icin anlamli -- Live modda parcalar
         # resume ihtimaline karsi zaten korunuyor (concatenate_blocks
@@ -1494,8 +1685,13 @@ class ForensicWidget(QWidget):
 
     def _on_mode_change(self, *_args):
         offline = self.radio_offline.isChecked()
-        self.check_compress.setEnabled(offline)
-        if not offline:
+        # Segmentli (.001/.002/...) cikti ile gzip sikistirma birlikte
+        # anlamli degil -- sikistirma TEK bir dosya uzerinde calisir,
+        # segmentlerin sadece ILKINI sikistirmak yanlis olur. Ikisi
+        # karsilikli dislanir.
+        segmenting = self._get_segment_size_bytes() is not None
+        self.check_compress.setEnabled(offline and not segmenting)
+        if not offline or segmenting:
             self.check_compress.setChecked(False)
 
     def _on_acq_type_change(self, *_args):
@@ -1508,6 +1704,10 @@ class ForensicWidget(QWidget):
 
     def _get_block_size_mb(self):
         return int(self.combo_block_size.currentText().split()[0])
+
+    def _get_segment_size_bytes(self):
+        """None doner -- bolme yok, tek dosya (varsayilan)."""
+        return self.combo_segment_size.currentData()
 
     # -- Log / durum ----------------------------------------------------
     def _log(self, msg, tag=None):
@@ -1743,7 +1943,7 @@ class ForensicWidget(QWidget):
 
         compress = mode == "offline" and self.check_compress.isChecked()
         ctx = self._new_report_ctx()
-        ctx.update(disk_number=disk_number, out_path=out_path, mode=mode, block_size_mb=self._get_block_size_mb(), compress=compress)
+        ctx.update(disk_number=disk_number, out_path=out_path, mode=mode, block_size_mb=self._get_block_size_mb(), compress=compress, segment_size_bytes=self._get_segment_size_bytes())
         self._begin_acquisition("windows_disk", ctx, f"MOD: {mode.upper()} | DISK: PhysicalDrive{disk_number} | ÇIKTI: {out_path}")
 
     def _start_disk_linux(self):
@@ -1767,7 +1967,7 @@ class ForensicWidget(QWidget):
 
         compress = mode == "offline" and self.check_compress.isChecked()
         ctx = self._new_report_ctx()
-        ctx.update(disk=disk, out_path=out_path, mode=mode, password=password, block_size_mb=self._get_block_size_mb(), compress=compress)
+        ctx.update(disk=disk, out_path=out_path, mode=mode, password=password, block_size_mb=self._get_block_size_mb(), compress=compress, segment_size_bytes=self._get_segment_size_bytes())
         self._begin_acquisition("linux_disk", ctx, f"MOD: {mode.upper()} | DISK: {disk} | ÇIKTI: {out_path}")
 
     def _start_file(self):
@@ -1925,6 +2125,8 @@ class ForensicWidget(QWidget):
         layout.addWidget(head)
 
         image_hash = d["integrity"]["image_hash"] or ""
+        md5_hash = d["integrity"]["md5_hash"] or ""
+        sha1_hash = d["integrity"]["sha1_hash"] or ""
         satirlar = [
             ("Vaka No", d["case"]["case_id"] or "—"),
             ("İnceleyen", d["case"]["examiner"] or "—"),
@@ -1933,6 +2135,8 @@ class ForensicWidget(QWidget):
             ("Hedef", d["acquisition"]["target_host"] or d["acquisition"]["source_identifier"] or "—"),
             ("Bağlantı Yöntemi", d["acquisition"]["connection_method"] or "—"),
             ("SHA-256", (image_hash[:24] + "…") if image_hash else "—"),
+            ("MD5", (md5_hash[:24] + "…") if md5_hash else "—"),
+            ("SHA-1", (sha1_hash[:24] + "…") if sha1_hash else "—"),
             ("Sonuç", d["result"]["status"]),
         ]
         for etiket, deger in satirlar:

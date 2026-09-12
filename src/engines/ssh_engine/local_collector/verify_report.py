@@ -20,13 +20,39 @@ Kullanim:
 """
 
 import argparse
+import glob
 import gzip
 import hashlib
 import json
 import os
+import re
 import sys
 
-from hash_verifier import HashError, HashMismatchError, compare_digests, verify_file
+from hash_verifier import HashError, HashMismatchError, compare_digests, hash_files_multi, verify_file
+
+
+def _find_segments(image_path):
+    """
+    image_path bir segmentli imajin ILK parcasiysa (orn. "image.001",
+    bkz. image_acquirer.write_segments()) ayni klasordeki TUM kardes
+    segmentleri numara sirasina gore doner. Segmentli bir desene
+    uymuyorsa (normal, tek dosyalik bir imaj) None doner.
+    """
+    match = re.match(r"^(.*)\.(\d+)$", os.path.basename(image_path))
+    if not match:
+        return None
+    base, _ilk_no_str = match.groups()
+    klasor = os.path.dirname(image_path) or "."
+    adaylar = glob.glob(os.path.join(klasor, f"{glob.escape(base)}.*"))
+    segmentler = []
+    for aday in adaylar:
+        m = re.match(rf"^{re.escape(base)}\.(\d+)$", os.path.basename(aday))
+        if m:
+            segmentler.append((int(m.group(1)), aday))
+    if len(segmentler) < 2:
+        return None  # tek dosya varsa segmentli sayma, normal yoldan devam etsin
+    segmentler.sort(key=lambda x: x[0])
+    return [path for _no, path in segmentler]
 
 
 def _print_progress(done, total):
@@ -109,8 +135,23 @@ def check_image_hash(report_path):
     print(f"[i] İmaj: {image_path}")
     print(f"[i] Rapordaki hash: {expected_hash}")
 
+    segmentler = _find_segments(image_path)
     is_gzip = image_path.endswith(".gz")
-    if is_gzip:
+    if segmentler:
+        print(f"[i] İmaj {len(segmentler)} segmente bölünmüş -- sırayla okunup SHA-256 hesaplanıyor...")
+        for s in segmentler:
+            print(f"    {s}")
+        try:
+            actual_hash = hash_files_multi(segmentler, algorithms=("sha256",))["sha256"]
+        except (OSError, FileNotFoundError) as exc:
+            print(f"\n[HATA] {exc}")
+            return False
+        if not compare_digests(actual_hash, expected_hash):
+            print("\n[!] DOĞRULAMA BAŞARISIZ — segmentler birlikte, rapordaki hash ile eşleşmiyor.")
+            print(f"    Beklenen  : {expected_hash}")
+            print(f"    Hesaplanan: {actual_hash}")
+            return False
+    elif is_gzip:
         print("[i] İmaj gzip ile sıkıştırılmış -- açılıp (decompress) ham içerik hesaplanıyor...")
         try:
             actual_hash = _hash_gzip_contents(image_path)
