@@ -27,7 +27,7 @@ import shlex
 from datetime import datetime, timezone
 
 import chain_of_custody as coc
-from image_acquirer import ensure_connection
+from image_acquirer import ensure_connection, _new_tree_manifest_path, _write_manifest, delete_manifest
 
 FILE_CHUNK_SIZE_MB = 4  # image_acquirer.BLOCK_SIZE_MB ile ayni
 MAX_RETRY_PER_BLOCK = 3
@@ -231,13 +231,23 @@ def acquire_remote_file(ssh, remote_path, local_path, password=None, block_size_
     return True, hasher.hexdigest()
 
 
-def acquire_remote_tree(ssh, remote_root, output_dir, password=None, progress_callback=None):
+def acquire_remote_tree(ssh, remote_root, output_dir, password=None, progress_callback=None,
+                         manifest_path=None, resume_state=None, host=None):
     """
     remote_root bir dosya ya da klasor olabilir. Klasorse altindaki tum
     dosyalari (find -type f) tek tek acquire_remote_file ile alir, goreli
     dizin yapisini output_dir altinda korur. Tek dosyaysa dogrudan onu alir.
 
     progress_callback(done, total) verilirse her dosyadan sonra cagrilir.
+
+    manifest_path/resume_state/host: docs/roadmap.md madde 0.4 -- program
+    TAMAMEN kapanip yeniden acilsa bile (image_acquirer.find_incomplete_tree_manifest
+    ile) kaldigi dosyadan devam edilebilmesi icin. Her dosya basariyla
+    alindiktan SONRA logs/manifest_tree_<tarih-saat>.json'a (resume_state
+    verilmisse AYNI dosyaya) kaydedilir -- image_acquirer.acquire_disk_image'in
+    her blok sonrasi manifest guncellemesiyle AYNI desen. Bu, output_dir
+    icindeki manifest_files.json'dan (islem SONUCUNUN kalici ozeti, resume
+    icin degil, her zaman ayrica yazilir) FARKLI bir dosyadir.
 
     Donus: manifest dict (remote_root, total_files, acquired, failed,
     acquired_at) ya da yol bulunamadiysa None.
@@ -254,16 +264,46 @@ def acquire_remote_tree(ssh, remote_root, output_dir, password=None, progress_ca
         dosyalar = list_remote_files(ssh, remote_root, password=password)
         taban = remote_root
 
-    coc.log_event(
-        coc.EVENT_EXAM_START,
-        f"Dosya/klasor alma baslatildi: {remote_root} ({len(dosyalar)} dosya)",
-    )
+    if manifest_path is None:
+        manifest_path = _new_tree_manifest_path()
+
+    onceden_alinan = set((resume_state or {}).get("acquired_files", []))
+    started_at_utc = (resume_state or {}).get("started_at_utc") or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    if onceden_alinan:
+        coc.log_event(
+            coc.EVENT_EXAM_RESUME,
+            f"Dosya/klasor alma devam ettiriliyor: {remote_root} "
+            f"({len(onceden_alinan)}/{len(dosyalar)} zaten tamamlanmis)",
+        )
+    else:
+        coc.log_event(
+            coc.EVENT_EXAM_START,
+            f"Dosya/klasor alma baslatildi: {remote_root} ({len(dosyalar)} dosya)",
+        )
 
     toplam = len(dosyalar)
-    sonuclar = []
+    sonuclar = list((resume_state or {}).get("acquired_detail", []))
     basarisiz = []
+    acquired_files = list(onceden_alinan)
+
+    def _yaz_kalici_manifest():
+        _write_manifest(manifest_path, {
+            "remote_root": remote_root,
+            "host": host,
+            "total_files": toplam,
+            "acquired_files": acquired_files,
+            "acquired_detail": sonuclar,
+            "failed_files": basarisiz,
+            "started_at_utc": started_at_utc,
+        })
 
     for i, uzak_dosya in enumerate(dosyalar, start=1):
+        if uzak_dosya in onceden_alinan:
+            if progress_callback:
+                progress_callback(i, toplam)
+            continue
+
         goreli = os.path.relpath(uzak_dosya, taban) if taban else os.path.basename(uzak_dosya)
         goreli = goreli.replace("/", os.sep)
         yerel_dosya = os.path.join(output_dir, goreli)
@@ -273,10 +313,16 @@ def acquire_remote_tree(ssh, remote_root, output_dir, password=None, progress_ca
             sonuclar.append({
                 "remote_path": uzak_dosya, "local_path": yerel_dosya, "sha256": hash_deger,
             })
+            acquired_files.append(uzak_dosya)
             coc.log_event(coc.EVENT_BLOCK_ACQUIRED, f"Dosya alindi ve dogrulandi: {uzak_dosya}", hash_deger)
         else:
             basarisiz.append(uzak_dosya)
             coc.log_event(coc.EVENT_EXAM_ERROR, f"Dosya alinamadi/dogrulanamadi: {uzak_dosya}")
+
+        # Her dosyadan sonra KALICI manifest guncellenir -- boylece program
+        # kapanip yeniden acilsa bile kaldigi dosyadan devam edilebilir
+        # (bkz. image_acquirer.acquire_disk_image'deki AYNI desen).
+        _yaz_kalici_manifest()
 
         if progress_callback:
             progress_callback(i, toplam)
@@ -287,6 +333,11 @@ def acquire_remote_tree(ssh, remote_root, output_dir, password=None, progress_ca
         f"{len(basarisiz)} basarisiz",
     )
 
+    if not basarisiz and len(acquired_files) == toplam:
+        # Tum dosyalar eksiksiz alindi -- yarim kalmis bir islem olarak
+        # tekrar sunulmamasi icin kalici manifest kaldirilir.
+        delete_manifest(manifest_path)
+
     manifest = {
         "remote_root": remote_root,
         "total_files": toplam,
@@ -296,8 +347,8 @@ def acquire_remote_tree(ssh, remote_root, output_dir, password=None, progress_ca
     }
 
     os.makedirs(output_dir, exist_ok=True)
-    manifest_path = os.path.join(output_dir, "manifest_files.json")
-    with open(manifest_path, "w", encoding="utf-8") as f:
+    ozet_yolu = os.path.join(output_dir, "manifest_files.json")
+    with open(ozet_yolu, "w", encoding="utf-8") as f:
         json.dump(manifest, f, indent=2, ensure_ascii=False)
 
     return manifest

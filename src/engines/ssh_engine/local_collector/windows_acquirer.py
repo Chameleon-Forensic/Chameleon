@@ -27,6 +27,8 @@ from datetime import datetime, timezone
 import chain_of_custody as coc
 from image_acquirer import (
     _new_manifest_path,
+    _new_tree_manifest_path,
+    _write_manifest,
     delete_manifest,
     ensure_connection,
 )
@@ -171,6 +173,7 @@ def acquire_disk_image_windows(
     resume_state=None,
     manifest_path=None,
     progress_callback=None,
+    host=None,
 ):
     """
     image_acquirer.acquire_disk_image ile ayni akis (write-block -> her
@@ -182,6 +185,10 @@ def acquire_disk_image_windows(
     os.makedirs(output_dir, exist_ok=True)
     if manifest_path is None:
         manifest_path = _new_manifest_path()
+
+    # bkz. image_acquirer.py'deki AYNI gerekce: "Yarim Kalanlar" listesinde
+    # gosterilebilmesi icin, resume'da ORIJINAL baslangic zamani korunur.
+    started_at_utc = (resume_state or {}).get("started_at_utc") or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     if start_block > 0:
         coc.log_event(
@@ -215,7 +222,10 @@ def acquire_disk_image_windows(
                 f"Write-block uygulanamadi, imaj alma durduruldu (Windows): PhysicalDrive{disk_number}",
             )
             return None
-    else:
+    elif start_block == 0:
+        # bkz. image_acquirer.py'deki AYNI duzeltme -- start_block > 0
+        # (resume) durumu yukarida (satir ~191-212) zaten GERCEK sebeple
+        # ayrica logland, burada tekrar "kullanici tercihi" YANLIS olurdu.
         coc.log_event(
             coc.EVENT_WRITE_BLOCK_SKIPPED,
             f"Write-block atlandi (Windows, kullanici tercihi): PhysicalDrive{disk_number}",
@@ -336,6 +346,9 @@ def acquire_disk_image_windows(
                 "acquired_blocks": acquired_blocks,
                 "failed_blocks": failed_blocks,
                 "block_paths": block_paths,
+                "host": host,
+                "started_at_utc": started_at_utc,
+                "target_os": "windows",
             }, f, indent=2)
 
     coc.log_event(
@@ -448,9 +461,11 @@ def acquire_remote_file_windows(ssh, remote_path, local_path):
     return True, gercek_hash
 
 
-def acquire_remote_tree_windows(ssh, remote_root, output_dir, progress_callback=None):
-    """file_acquirer.acquire_remote_tree ile ayni davranis, Windows yollari
-    (ters slash) ve PowerShell komutlariyla."""
+def acquire_remote_tree_windows(ssh, remote_root, output_dir, progress_callback=None,
+                                 manifest_path=None, resume_state=None, host=None):
+    """file_acquirer.acquire_remote_tree ile ayni davranis (resume destegi
+    dahil, bkz. o fonksiyonun docstring'i -- docs/roadmap.md madde 0.4),
+    Windows yollari (ters slash) ve PowerShell komutlariyla."""
     kind = remote_path_kind_windows(ssh, remote_root)
     if kind is None:
         coc.log_event(coc.EVENT_EXAM_ERROR, f"Yol bulunamadi (Windows): {remote_root}")
@@ -464,16 +479,46 @@ def acquire_remote_tree_windows(ssh, remote_root, output_dir, progress_callback=
         dosyalar = list_remote_files_windows(ssh, remote_root)
         taban = norm_root
 
-    coc.log_event(
-        coc.EVENT_EXAM_START,
-        f"Dosya/klasor alma baslatildi (Windows): {remote_root} ({len(dosyalar)} dosya)",
-    )
+    if manifest_path is None:
+        manifest_path = _new_tree_manifest_path()
+
+    onceden_alinan = set((resume_state or {}).get("acquired_files", []))
+    started_at_utc = (resume_state or {}).get("started_at_utc") or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    if onceden_alinan:
+        coc.log_event(
+            coc.EVENT_EXAM_RESUME,
+            f"Dosya/klasor alma devam ettiriliyor (Windows): {remote_root} "
+            f"({len(onceden_alinan)}/{len(dosyalar)} zaten tamamlanmis)",
+        )
+    else:
+        coc.log_event(
+            coc.EVENT_EXAM_START,
+            f"Dosya/klasor alma baslatildi (Windows): {remote_root} ({len(dosyalar)} dosya)",
+        )
 
     toplam = len(dosyalar)
-    sonuclar = []
+    sonuclar = list((resume_state or {}).get("acquired_detail", []))
     basarisiz = []
+    acquired_files = list(onceden_alinan)
+
+    def _yaz_kalici_manifest():
+        _write_manifest(manifest_path, {
+            "remote_root": remote_root,
+            "host": host,
+            "total_files": toplam,
+            "acquired_files": acquired_files,
+            "acquired_detail": sonuclar,
+            "failed_files": basarisiz,
+            "started_at_utc": started_at_utc,
+        })
 
     for i, uzak_dosya in enumerate(dosyalar, start=1):
+        if uzak_dosya in onceden_alinan:
+            if progress_callback:
+                progress_callback(i, toplam)
+            continue
+
         norm_dosya = uzak_dosya.replace("\\", "/")
         goreli = os.path.relpath(norm_dosya, taban) if taban else os.path.basename(norm_dosya)
         goreli = goreli.replace("/", os.sep)
@@ -482,10 +527,13 @@ def acquire_remote_tree_windows(ssh, remote_root, output_dir, progress_callback=
         basarili, hash_deger = acquire_remote_file_windows(ssh, uzak_dosya, yerel_dosya)
         if basarili:
             sonuclar.append({"remote_path": uzak_dosya, "local_path": yerel_dosya, "sha256": hash_deger})
+            acquired_files.append(uzak_dosya)
             coc.log_event(coc.EVENT_BLOCK_ACQUIRED, f"Dosya alindi ve dogrulandi (Windows): {uzak_dosya}", hash_deger)
         else:
             basarisiz.append(uzak_dosya)
             coc.log_event(coc.EVENT_EXAM_ERROR, f"Dosya alinamadi/dogrulanamadi (Windows): {uzak_dosya}")
+
+        _yaz_kalici_manifest()
 
         if progress_callback:
             progress_callback(i, toplam)
@@ -496,6 +544,9 @@ def acquire_remote_tree_windows(ssh, remote_root, output_dir, progress_callback=
         f"{len(basarisiz)} basarisiz",
     )
 
+    if not basarisiz and len(acquired_files) == toplam:
+        delete_manifest(manifest_path)
+
     manifest = {
         "remote_root": remote_root,
         "total_files": toplam,
@@ -505,8 +556,8 @@ def acquire_remote_tree_windows(ssh, remote_root, output_dir, progress_callback=
     }
 
     os.makedirs(output_dir, exist_ok=True)
-    manifest_path = os.path.join(output_dir, "manifest_files.json")
-    with open(manifest_path, "w", encoding="utf-8") as f:
+    ozet_yolu = os.path.join(output_dir, "manifest_files.json")
+    with open(ozet_yolu, "w", encoding="utf-8") as f:
         json.dump(manifest, f, indent=2, ensure_ascii=False)
 
     return manifest

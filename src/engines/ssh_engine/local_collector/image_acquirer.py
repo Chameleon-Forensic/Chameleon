@@ -92,12 +92,23 @@ def load_manifest(path):
         return None
 
 
-def find_incomplete_manifest(disk_path=None):
+def find_incomplete_manifest(disk_path=None, host=None):
     """
     logs/ klasorunde yarim kalmis (acquired_blocks < total_blocks) bir
     manifest olup olmadigina bakar. Bulursa (yol, veri) tuple'i, bulamazsa
     None doner. disk_path verilirse sadece o diske ait manifestler dikkate
     alinir (en yeniden en eskiye dogru taranir).
+
+    host verilirse EK bir guvenlik kontrolu yapilir: manifestteki host
+    DOLU ve FARKLIYSA o manifest reddedilir. Bu olmadan, iki AYRI hedef
+    makinede ayni disk_path (orn. "PhysicalDrive0", gercek hayatta cok
+    yaygin) kullanildiginda, host A'da yarim kalmis bir islem host B'ye
+    baglanildiginda yanlislikla "devam et" olarak sunuluyor, host B'den
+    okunan yeni bloklar host A'nin eski blok dosyalariyla BIRLESTIRILIP
+    delili bozuyordu (bkz. docs/hatalar_ve_sonuclar.md). Manifestin host'u
+    BOS ise (eski format ya da CLI'den gelen manifestler icin gecerli),
+    kesin bilgi olmadigi icin reddetmiyoruz -- sadece GERCEKTEN FARKLI
+    bilinen bir host icin reddediyoruz.
     """
     if not os.path.isdir(MANIFEST_DIR):
         return None
@@ -114,10 +125,112 @@ def find_incomplete_manifest(disk_path=None):
             continue
         if disk_path is not None and veri.get("disk_path") != disk_path:
             continue
+        manifest_host = veri.get("host")
+        if host is not None and manifest_host is not None and manifest_host != host:
+            continue
         if len(veri.get("acquired_blocks", [])) < veri.get("total_blocks", 0):
             return yol, veri
 
     return None
+
+
+def list_incomplete_manifests():
+    """
+    find_incomplete_manifest'in "belirli bir diske gore ilk eslesen"
+    davranisinin aksine, MANIFEST_DIR'deki TUM yarim kalmis (acquired_blocks
+    < total_blocks) manifestleri (yol, veri) ciftleri olarak dondurur --
+    launcher'daki "Yarim Kalanlar" listesi icin (bkz. docs/roadmap.md).
+    En yeniden en eskiye siralanir (dosya adindaki tarih-saat damgasina gore).
+    """
+    if not os.path.isdir(MANIFEST_DIR):
+        return []
+
+    adaylar = sorted(
+        (f for f in os.listdir(MANIFEST_DIR) if f.startswith("manifest_") and f.endswith(".json")),
+        reverse=True,
+    )
+
+    sonuc = []
+    for dosya_adi in adaylar:
+        yol = os.path.join(MANIFEST_DIR, dosya_adi)
+        veri = load_manifest(yol)
+        if veri is None:
+            continue
+        if len(veri.get("acquired_blocks", [])) < veri.get("total_blocks", 0):
+            sonuc.append((yol, veri))
+    return sonuc
+
+
+# ---------------------------------------------------------------------------
+# Dosya/klasor (tree) modu icin kalici resume -- docs/roadmap.md madde 0.4.
+# Disk manifestleriyle (yukarida) AYNI MANIFEST_DIR'i kullanir ama farkli
+# bir dosya adi oneki (manifest_tree_*) ile -- boylece find_incomplete_manifest/
+# list_incomplete_manifests (yukarida) bunlari hic taramiyor (onlarin
+# aradigi acquired_blocks/total_blocks alanlari tree manifestinde yok, 0<0
+# hep False oldugu icin dogal olarak elenirler), asagidaki iki fonksiyon da
+# SADECE manifest_tree_ onekli dosyalari tarar -- iki tur birbirine hic
+# karismiyor.
+# ---------------------------------------------------------------------------
+
+def _new_tree_manifest_path():
+    os.makedirs(MANIFEST_DIR, exist_ok=True)
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    return os.path.join(MANIFEST_DIR, f"manifest_tree_{timestamp}.json")
+
+
+def find_incomplete_tree_manifest(remote_root, host=None):
+    """
+    find_incomplete_manifest ile AYNI desen (host guvenlik kontrolu dahil,
+    bkz. yukaridaki fonksiyonun docstring'i -- ayni gerekce burada da
+    gecerli: iki farkli hedef makinede ayni remote_root yolu -- orn.
+    "/home/user/belgeler" -- kullanilmasi yaygin olabilir), ama dosya/klasor
+    (tree) modu icin: acquired_files < total_files olan manifest_tree_*.json
+    dosyalarini arar.
+    """
+    if not os.path.isdir(MANIFEST_DIR):
+        return None
+
+    adaylar = sorted(
+        f for f in os.listdir(MANIFEST_DIR)
+        if f.startswith("manifest_tree_") and f.endswith(".json")
+    )
+
+    for dosya_adi in reversed(adaylar):
+        yol = os.path.join(MANIFEST_DIR, dosya_adi)
+        veri = load_manifest(yol)
+        if veri is None:
+            continue
+        if veri.get("remote_root") != remote_root:
+            continue
+        manifest_host = veri.get("host")
+        if host is not None and manifest_host is not None and manifest_host != host:
+            continue
+        if len(veri.get("acquired_files", [])) < veri.get("total_files", 0):
+            return yol, veri
+
+    return None
+
+
+def list_incomplete_tree_manifests():
+    """list_incomplete_manifests ile AYNI, tree modu icin -- launcher'daki
+    "Yarim Kalanlar" sayfasi bunu SSH disk listesiyle birlikte gosterir."""
+    if not os.path.isdir(MANIFEST_DIR):
+        return []
+
+    adaylar = sorted(
+        (f for f in os.listdir(MANIFEST_DIR) if f.startswith("manifest_tree_") and f.endswith(".json")),
+        reverse=True,
+    )
+
+    sonuc = []
+    for dosya_adi in adaylar:
+        yol = os.path.join(MANIFEST_DIR, dosya_adi)
+        veri = load_manifest(yol)
+        if veri is None:
+            continue
+        if len(veri.get("acquired_files", [])) < veri.get("total_files", 0):
+            sonuc.append((yol, veri))
+    return sonuc
 
 
 def delete_manifest(path):
@@ -338,6 +451,7 @@ def acquire_disk_image(
     start_block=0,
     resume_state=None,
     manifest_path=None,
+    host=None,
 ):
     """
     Uzak diski blok blok cekip her bloğu diske yazmadan once dogrular.
@@ -373,6 +487,12 @@ def acquire_disk_image(
 
     if manifest_path is None:
         manifest_path = _new_manifest_path()
+
+    # "Yarim Kalanlar" listesinde (launcher) anlamli gosterilebilmesi icin
+    # -- resume durumunda ORIJINAL baslangic zamani korunur, yeni bir tane
+    # uretilmez (aksi halde liste her devam edilisinde "az once basladi"
+    # gibi yanlis bir izlenim verirdi).
+    started_at_utc = (resume_state or {}).get("started_at_utc") or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     if start_block > 0:
         coc.log_event(
@@ -410,7 +530,11 @@ def acquire_disk_image(
                 f"Write-block uygulanamadi, imaj alma durduruldu: {disk_path}",
             )
             return None
-    else:
+    elif start_block == 0:
+        # start_block > 0 (resume) durumunda BURAYA hic girilmiyor -- o durum
+        # zaten yukarida (satir ~437-448) GERCEK sebeple (resume sirasinda
+        # tekrar uygulanmadi, sadece kontrol edildi) ayrica logland; burada
+        # tekrar "kullanici tercihi" demek YANLIS bir sebep uydurmus olurdu.
         coc.log_event(
             coc.EVENT_WRITE_BLOCK_SKIPPED,
             f"Write-block atlandi (kullanici tercihi): {disk_path}",
@@ -563,6 +687,9 @@ def acquire_disk_image(
             "acquired_blocks": acquired_blocks,
             "failed_blocks": failed_blocks,
             "block_paths": block_paths,
+            "host": host,
+            "started_at_utc": started_at_utc,
+            "target_os": "linux",
         })
 
     coc.log_event(
@@ -627,6 +754,79 @@ def concatenate_blocks(block_paths, total_blocks, output_dir=IMAGE_DIR, output_p
         print(f"[i] {total_blocks} parca dosyasi temizlendi (birlesik imaj korunuyor).")
 
     return output_path
+
+
+def write_segments(block_paths, total_blocks, segment_size_bytes, output_dir=IMAGE_DIR,
+                    output_basename="full_image", cleanup=False):
+    """
+    concatenate_blocks() ile AYNI kucuk blok dosyalarini, TEK bir buyuk
+    dosya yerine sabit boyutlu ARDISIK parcalara ("<basename>.001",
+    ".002", ...) boler -- FTK Imager'in "Raw (dd) - split" ciktisiyla
+    ayni adlandirma kuralini kullanir. Amac: hedef depolama alani FAT32
+    (4 GB dosya siniri) ya da CD/DVD gibi sabit boyutlu bir ortamsa,
+    tek parca halinde sigmayan bir imaji tasinabilir kilmak.
+
+    Blok sinirlari segment sinirlariyla ORTUSMEYEBILIR (bir blok iki
+    segmente bolunebilir) -- bu, delil butunlugunu ETKILEMEZ, cunku
+    butunluk HER ZAMAN mantiksal bayt akisina (hash_verifier.
+    hash_files_multi ile segmentler SIRAYLA okunarak) dayanir, segmentlerin
+    kendi sinirlarina degil.
+
+    Eksik blok varsa (concatenate_blocks() ile ayni kural) hicbir segment
+    yazilmadan None doner.
+
+    Donus: yazilan segment yollarinin SIRALI listesi (rapor/dogrulama
+    icin), ya da eksik blok varsa None.
+    """
+    for i in range(total_blocks):
+        if i not in block_paths:
+            print(f"[-] Blok {i} eksik, segmentli birlestirme yapilamiyor.")
+            return None
+
+    # Kac segment gerekecegini onceden hesapla -- dosya adlarinin
+    # (orn. 1200 segmentlik cok buyuk bir imaj) 3 haneyle sinirli
+    # KALMAMASI icin genislik dinamik.
+    toplam_bayt = sum(os.path.getsize(block_paths[i]) for i in range(total_blocks))
+    segment_sayisi = max(1, -(-toplam_bayt // segment_size_bytes))  # tavana yuvarla
+    genislik = max(3, len(str(segment_sayisi)))
+
+    os.makedirs(output_dir, exist_ok=True)
+    segment_paths = []
+    segment_no = 1
+    kalan_segment_kapasitesi = segment_size_bytes
+    hedef = open(os.path.join(output_dir, f"{output_basename}.{segment_no:0{genislik}d}"), "wb")
+    segment_paths.append(hedef.name)
+
+    try:
+        for i in range(total_blocks):
+            with open(block_paths[i], "rb") as parca:
+                veri = parca.read()
+            offset = 0
+            while offset < len(veri):
+                if kalan_segment_kapasitesi == 0:
+                    hedef.close()
+                    segment_no += 1
+                    kalan_segment_kapasitesi = segment_size_bytes
+                    hedef = open(
+                        os.path.join(output_dir, f"{output_basename}.{segment_no:0{genislik}d}"), "wb"
+                    )
+                    segment_paths.append(hedef.name)
+                yaz_boyutu = min(kalan_segment_kapasitesi, len(veri) - offset)
+                hedef.write(veri[offset:offset + yaz_boyutu])
+                offset += yaz_boyutu
+                kalan_segment_kapasitesi -= yaz_boyutu
+    finally:
+        hedef.close()
+
+    if cleanup:
+        for i in range(total_blocks):
+            try:
+                os.remove(block_paths[i])
+            except OSError as e:
+                print(f"[-] Blok {i} dosyasi silinemedi ({block_paths[i]}): {e}")
+        print(f"[i] {total_blocks} parca dosyasi temizlendi ({len(segment_paths)} segment korunuyor).")
+
+    return segment_paths
 
 
 def compress_image(image_path, remove_original=True):

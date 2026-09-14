@@ -43,6 +43,7 @@ if getattr(sys, "frozen", False):
 else:
     HISTORY_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 HISTORY_FILE = os.path.join(HISTORY_DIR, "case_history.json")
+TAGS_FILE = os.path.join(HISTORY_DIR, "case_tags.json")
 
 
 def _now_iso():
@@ -84,6 +85,8 @@ class ForensicReport:
 
         self.hash_algorithm = "SHA-256"
         self.image_hash = None
+        self.md5_hash = None
+        self.sha1_hash = None
         self.total_bytes = None
         self.chunk_size_bytes = None
         self.chunk_count = None
@@ -118,8 +121,21 @@ class ForensicReport:
         self.write_blocking_reason = reason
 
     def finish(self, status, output_path=None, image_hash=None, total_bytes=None,
-               chunk_size_bytes=None, chunk_count=None, failed_items=None):
-        """Alma islemi bitince (basarili/basarisiz fark etmez) cagrilir."""
+               chunk_size_bytes=None, chunk_count=None, failed_items=None,
+               md5_hash=None, sha1_hash=None):
+        """Alma islemi bitince (basarili/basarisiz fark etmez) cagrilir.
+
+        md5_hash/sha1_hash: cagiran taraf bunlari ZATEN hesapladiysa (orn.
+        hash_verifier.hash_file_multi ile SHA-256'yla AYNI okuma gecisinde)
+        buraya dogrudan verilir -- boylece dosya IKINCI KEZ okunmaz. Eskiden
+        bu ikisi HER ZAMAN burada, SHA-256 hesaplandiktan SONRA dosyayi
+        bastan sona tekrar okuyarak hesaplaniyordu; buyuk bir disk imajinda
+        (100+ GB) bu, imaj alma suresini neredeyse ikiye katliyordu (bkz.
+        docs/hatalar_ve_sonuclar.md). Verilmezlerse (henuz tum cagiran
+        yerler guncellenmedigi icin, orn. eski/ozel bir cagri) asagidaki
+        FALLBACK ile eskisi gibi dosyadan hesaplanir -- davranis hicbir
+        cagiran icin BOZULMAZ, sadece guncellenenler icin hizlanir.
+        """
         self.end_time_utc = _now_iso()
         self.status = status
         self.output_path = output_path
@@ -128,6 +144,38 @@ class ForensicReport:
         self.chunk_size_bytes = chunk_size_bytes
         self.chunk_count = chunk_count
         self.failed_items = failed_items or []
+
+        if md5_hash is not None or sha1_hash is not None:
+            self.md5_hash = md5_hash
+            self.sha1_hash = sha1_hash
+            return
+
+        # FALLBACK: cagiran md5_hash/sha1_hash gecirmedi -- eski davranis
+        # (dosyayi burada, IKINCI KEZ, bastan sona okuyarak hesapla).
+        # Birincil butunluk degeri SHA-256 (image_hash) olarak kalir --
+        # chunk dogrulama/resume/verify_report.py hep onu kullanir. Dosya
+        # yoksa/okunamiyorsa (ornegin basarisiz islem, ya da klasor
+        # modunda tek bir "output_path" olmamasi) sessizce None birakilir.
+        if output_path and os.path.isfile(output_path):
+            try:
+                md5 = hashlib.md5()
+                sha1 = hashlib.sha1()
+                with open(output_path, "rb") as f:
+                    for block in iter(lambda: f.read(4 * 1024 * 1024), b""):
+                        md5.update(block)
+                        sha1.update(block)
+                self.md5_hash = md5.hexdigest()
+                self.sha1_hash = sha1.hexdigest()
+            except OSError:
+                pass
+            except ValueError:
+                # FIPS uyumlu OpenSSL derlemelerinde hashlib.md5()/sha1()
+                # "kisitli algoritma" diye ValueError firlatir (gorev
+                # yapan/kanun uygulayici makinelerde beklenmedik degil).
+                # SHA-256 zaten birincil butunluk degeri, MD5/SHA-1 sadece
+                # ek/uyumluluk alani -- bu yuzden burada rapor kaydini
+                # BOZMADAN sessizce None birakiyoruz.
+                pass
 
     def set_verification(self, matched):
         self.verified = True
@@ -173,6 +221,8 @@ class ForensicReport:
             "integrity": {
                 "hash_algorithm": self.hash_algorithm,
                 "image_hash": self.image_hash,
+                "md5_hash": self.md5_hash,
+                "sha1_hash": self.sha1_hash,
                 "total_bytes": self.total_bytes,
                 "chunk_size_bytes": self.chunk_size_bytes,
                 "chunk_count": self.chunk_count,
@@ -257,6 +307,8 @@ class ForensicReport:
   <div class="kv">
     <div>Hash Algoritması</div><div>{esc(d['integrity']['hash_algorithm'])}</div>
     <div>İmaj Hash</div><div style="word-break:break-all">{esc(d['integrity']['image_hash']) or '—'}</div>
+    <div>MD5</div><div style="word-break:break-all">{esc(d['integrity']['md5_hash']) or '—'}</div>
+    <div>SHA-1</div><div style="word-break:break-all">{esc(d['integrity']['sha1_hash']) or '—'}</div>
     <div>Toplam Boyut (bayt)</div><div>{esc(d['integrity']['total_bytes']) or '—'}</div>
     <div>Parça Boyutu (bayt)</div><div>{esc(d['integrity']['chunk_size_bytes']) or '—'}</div>
     <div>Parça Sayısı</div><div>{esc(d['integrity']['chunk_count']) or '—'}</div>
@@ -356,6 +408,146 @@ class ForensicReport:
             pass
 
 
+def export_pdf(report_json_path, pdf_path):
+    """
+    Diskteki bir report.json'dan (Vaka Gecmisi'nden -- artik canli bir
+    ForensicReport nesnesi yok, sadece kaydedilmis dosya var), to_html()
+    ile AYNI bolumleri (Vaka/Alma/Butunluk/Sonuc/Delil Zinciri) iceren
+    tek sayfalik(*) bir PDF uretir. (*sayfa sayisi delil zinciri olay
+    sayisina gore buyur.)
+
+    report.json HER ZAMAN saf UTC tutar (display_timezone kaydedilmez,
+    bkz. to_dict()) -- bu yuzden PDF'te de zaman damgalari hep UTC,
+    to_html()'deki yerel saat eklentisi burada YOK (kayitli dosyadan
+    o bilgi geri kazanilamaz, ki zaten delil olarak gecerli olan UTC).
+    """
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.units import mm
+    from reportlab.lib import colors
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.ttfonts import TTFont
+    from reportlab.platypus import (
+        SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle,
+    )
+
+    with open(report_json_path, "r", encoding="utf-8") as f:
+        d = json.load(f)
+
+    # ReportLab'in yerlesik fontlari (Helvetica vb.) WinAnsi/Latin-1 ile
+    # sinirli -- Turkce'ye ozgu I/i/s/g karakterlerini (Latin Extended-A)
+    # icermiyor, siyah kutu olarak basiliyorlardi. Qt arayuzu icin zaten
+    # gomulu olan (shared/assets/fonts/Inter.ttf, SIL OFL) fontu burada da
+    # kullaniyoruz -- yeni bir font dosyasi eklemeye gerek kalmadi. Ayri
+    # bir bold TTF'i yok; "<b>" etiketlerinin patlamamasi icin "Inter-Bold"
+    # adini AYNI dosyaya esliyoruz (gorsel olarak kalin cikmaz, ama en
+    # azindan hatasiz render edilir).
+    _font_path = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "assets", "fonts", "Inter.ttf"
+    )
+    if "Inter" not in pdfmetrics.getRegisteredFontNames():
+        pdfmetrics.registerFont(TTFont("Inter", _font_path))
+        pdfmetrics.registerFont(TTFont("Inter-Bold", _font_path))
+        pdfmetrics.registerFontFamily("Inter", normal="Inter", bold="Inter-Bold")
+
+    styles = getSampleStyleSheet()
+    h1 = ParagraphStyle("h1", parent=styles["Title"], fontName="Inter-Bold", fontSize=16)
+    h2 = ParagraphStyle("h2", parent=styles["Heading2"], fontName="Inter-Bold",
+                         textColor=colors.HexColor("#3B5D6B"), spaceBefore=14, spaceAfter=4)
+    body = ParagraphStyle("body", parent=styles["BodyText"], fontName="Inter")
+
+    def g(*keys):
+        cur = d
+        for k in keys:
+            cur = (cur or {}).get(k)
+        return "—" if cur in (None, "") else str(cur)
+
+    def kv_table(rows):
+        data = [[Paragraph(f"<b>{label}</b>", body), Paragraph(value, body)] for label, value in rows]
+        tbl = Table(data, colWidths=[55 * mm, 115 * mm])
+        tbl.setStyle(TableStyle([
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+            ("TOPPADDING", (0, 0), (-1, -1), 3),
+        ]))
+        return tbl
+
+    story = [
+        Paragraph("Chameleon — Adli Bilişim Raporu", h1),
+        Paragraph(f"Araç: {g('tool', 'name')} v{g('tool', 'version')} · "
+                  f"Motor: {g('tool', 'engine')} · Yöntem: {g('tool', 'method')}", body),
+
+        Paragraph("Vaka Bilgileri", h2),
+        kv_table([
+            ("Vaka No", g("case", "case_id")),
+            ("İnceleyen", g("case", "examiner")),
+            ("Cihaz Sahibi / Yetkili Kişi", g("case", "custodian")),
+            ("Organizasyon", g("case", "organization")),
+        ]),
+
+        Paragraph("Alma Bilgileri", h2),
+        kv_table([
+            ("Hedef İşletim Sistemi", g("acquisition", "target_os")),
+            ("Hedef Host", g("acquisition", "target_host")),
+            ("Kaynak", g("acquisition", "source_identifier")),
+            ("Alma Türü", g("acquisition", "acquisition_type")),
+            ("Bağlantı Yöntemi", g("acquisition", "connection_method")),
+            ("Başlangıç (UTC)", g("acquisition", "start_time_utc")),
+            ("Bitiş (UTC)", g("acquisition", "end_time_utc")),
+            ("Write-Blocking", f"{g('acquisition', 'write_blocking_applied')} — "
+                                f"{g('acquisition', 'write_blocking_reason')}"),
+        ]),
+
+        Paragraph("Bütünlük (Integrity)", h2),
+        kv_table([
+            ("Hash Algoritması", g("integrity", "hash_algorithm")),
+            ("İmaj Hash", g("integrity", "image_hash")),
+            ("MD5", g("integrity", "md5_hash")),
+            ("SHA-1", g("integrity", "sha1_hash")),
+            ("Toplam Boyut (bayt)", g("integrity", "total_bytes")),
+            ("Parça Boyutu (bayt)", g("integrity", "chunk_size_bytes")),
+            ("Parça Sayısı", g("integrity", "chunk_count")),
+        ]),
+
+        Paragraph("Sonuç", h2),
+        kv_table([
+            ("Durum", g("result", "status")),
+            ("Çıktı Yolu", g("result", "output_path")),
+            ("Başarısız Öğeler", ", ".join(d.get("result", {}).get("failed_items") or []) or "—"),
+            ("Doğrulama Yapıldı mı", g("verification", "verified")),
+            ("Hash Eşleşmesi", g("verification", "hash_match")),
+        ]),
+
+        Paragraph("Delil Zinciri (Chain of Custody)", h2),
+    ]
+
+    events = d.get("chain_of_custody", {}).get("events") or []
+    header_row = [Paragraph(f"<b>{h}</b>", body) for h in ("Zaman (UTC)", "Olay", "Açıklama", "Hash")]
+    event_rows = [header_row]
+    for e in events:
+        event_rows.append([
+            Paragraph(str(e.get("timestamp_utc") or ""), body),
+            Paragraph(str(e.get("event") or ""), body),
+            Paragraph(str(e.get("description") or ""), body),
+            Paragraph(str(e.get("hash") or ""), body),
+        ])
+    events_tbl = Table(event_rows, colWidths=[32 * mm, 38 * mm, 70 * mm, 30 * mm], repeatRows=1)
+    events_tbl.setStyle(TableStyle([
+        ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#DDDDDD")),
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#F0F0F0")),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("FONTSIZE", (0, 0), (-1, -1), 8),
+        ("TOPPADDING", (0, 0), (-1, -1), 3),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+    ]))
+    story.append(events_tbl)
+
+    doc = SimpleDocTemplate(pdf_path, pagesize=A4,
+                             leftMargin=18 * mm, rightMargin=18 * mm,
+                             topMargin=16 * mm, bottomMargin=16 * mm)
+    doc.build(story)
+
+
 def read_history():
     """launcher/chameleon_gui.py'nin "Vaka Geçmişi" sayfasi icin: tum
     kayitli vaka ozetlerini en yeniden en eskiye dogru dondurur."""
@@ -367,3 +559,34 @@ def read_history():
     except (OSError, json.JSONDecodeError):
         return []
     return list(reversed(history))
+
+
+def read_tags():
+    """Vaka Gecmisi'ndeki kullanici tanimli etiketleri dondurur --
+    {report_path: etiket_metni} seklinde. Dosya yoksa/bozuksa bos sozluk
+    doner (etiketsiz gorunum, veri kaybi degil)."""
+    try:
+        with open(TAGS_FILE, "r", encoding="utf-8") as f:
+            tags = json.load(f)
+        if not isinstance(tags, dict):
+            return {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return tags
+
+
+def set_tag(report_path, tag_text):
+    """Bir vakanin etiketini kaydeder/gunceller. tag_text bos ise
+    etiket tamamen kaldirilir (dosyada gereksiz bos anahtar birikmesin)."""
+    os.makedirs(HISTORY_DIR, exist_ok=True)
+    tags = read_tags()
+    tag_text = (tag_text or "").strip()
+    if tag_text:
+        tags[report_path] = tag_text
+    else:
+        tags.pop(report_path, None)
+    try:
+        with open(TAGS_FILE, "w", encoding="utf-8") as f:
+            json.dump(tags, f, indent=2, ensure_ascii=False)
+    except OSError:
+        pass
