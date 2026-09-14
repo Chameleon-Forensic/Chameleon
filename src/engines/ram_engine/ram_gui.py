@@ -42,6 +42,11 @@ try:
 except ImportError:
     ForensicReport = None
 
+try:
+    import incomplete_ops
+except ImportError:
+    incomplete_ops = None
+
 _COC_DIR = os.path.join(RAM_ENGINE_DIR, "..", "ssh_engine", "local_collector")
 if os.path.isdir(_COC_DIR):
     sys.path.insert(0, _COC_DIR)
@@ -49,6 +54,10 @@ try:
     import chain_of_custody as coc
 except ImportError:
     coc = None
+try:
+    from hash_verifier import hash_file_multi
+except ImportError:
+    hash_file_multi = None
 
 
 def list_processes():
@@ -138,43 +147,74 @@ class RamWorker(QThread):
         if coc:
             coc.log_event(coc.EVENT_EXAM_START, f"RAM process dump baslatildi: {process_label}")
 
-        self.log.emit(f"$ {' '.join(args)}")
-        try:
-            proc = subprocess.Popen(
-                args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                text=True, creationflags=subprocess.CREATE_NO_WINDOW,
+        # "Yarim Kalanlar" listesi icin -- gercek resume degil (bir process
+        # dump kaldigi yerden devam edemez), sadece "basladi, bitirmedi"
+        # kaydi. Uygulama/surec BITMEDEN once kapanirsa bu kayit silinmez,
+        # launcher acilista yarim kalmis olarak gorur (bkz. incomplete_ops.py).
+        op_id = None
+        if incomplete_ops:
+            op_id = incomplete_ops.record_start(
+                "ram_process", process_label,
+                details={
+                    "case_id": self.case, "examiner": self.examiner,
+                    "custodian": self.custodian, "organization": self.organization,
+                    "out_path": out_path,
+                },
             )
-            for line in proc.stdout:
-                self.log.emit(line.rstrip("\n"))
-            exit_code = proc.wait()
-        except OSError as exc:
-            self.log.emit(f"Başlatılamadı: {exc}")
-            exit_code = -1
 
-        if exit_code == 0 and os.path.exists(out_path):
-            self.status.emit("Tamamlandı.", ui.SUCCESS)
-            if coc:
-                coc.log_event(coc.EVENT_EXAM_END, f"RAM process dump tamamlandi: {out_path}")
-            if report:
-                dosya_hash = None
-                try:
-                    with open(out_path, "rb") as f:
-                        dosya_hash = hashlib.sha256(f.read()).hexdigest()
-                except OSError:
-                    pass
-                report.finish(
-                    status="success", output_path=out_path, image_hash=dosya_hash,
-                    total_bytes=os.path.getsize(out_path) if os.path.exists(out_path) else None,
+        try:
+            self.log.emit(f"$ {' '.join(args)}")
+            try:
+                proc = subprocess.Popen(
+                    args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                    text=True, creationflags=subprocess.CREATE_NO_WINDOW,
                 )
-                rapor_yolu = self._save_report(report, os.path.dirname(out_path) or ".")
-                self.report_ready.emit(report, rapor_yolu)
-        else:
-            self.status.emit(f"Başarısız (kod {exit_code}).", ui.ERROR)
-            if coc:
-                coc.log_event(coc.EVENT_EXAM_ERROR, f"RAM process dump basarisiz (kod {exit_code}): {process_label}")
-            if report:
-                report.finish(status="failed", output_path=out_path)
-                self._save_report(report, os.path.dirname(out_path) or ".")
+                for line in proc.stdout:
+                    self.log.emit(line.rstrip("\n"))
+                exit_code = proc.wait()
+            except OSError as exc:
+                self.log.emit(f"Başlatılamadı: {exc}")
+                exit_code = -1
+
+            if exit_code == 0 and os.path.exists(out_path):
+                self.status.emit("Tamamlandı.", ui.SUCCESS)
+                if coc:
+                    coc.log_event(coc.EVENT_EXAM_END, f"RAM process dump tamamlandi: {out_path}")
+                if report:
+                    dosya_hash = None
+                    md5_hash = None
+                    sha1_hash = None
+                    try:
+                        with open(out_path, "rb") as f:
+                            veri = f.read()
+                        # Dosya zaten SHA-256 icin TAMAMEN belleğe okundu --
+                        # MD5/SHA-1'i de AYNI veri uzerinden hesaplamak
+                        # ekstra I/O gerektirmiyor (bkz. forensic_report.
+                        # finish()'teki AYNI gerekce, docs/hatalar_ve_sonuclar.md).
+                        dosya_hash = hashlib.sha256(veri).hexdigest()
+                        md5_hash = hashlib.md5(veri).hexdigest()
+                        sha1_hash = hashlib.sha1(veri).hexdigest()
+                    except OSError:
+                        pass
+                    except ValueError:
+                        pass  # FIPS -- bkz. forensic_report.py'deki AYNI gerekce
+                    report.finish(
+                        status="success", output_path=out_path, image_hash=dosya_hash,
+                        total_bytes=os.path.getsize(out_path) if os.path.exists(out_path) else None,
+                        md5_hash=md5_hash, sha1_hash=sha1_hash,
+                    )
+                    rapor_yolu = self._save_report(report, os.path.dirname(out_path) or ".")
+                    self.report_ready.emit(report, rapor_yolu)
+            else:
+                self.status.emit(f"Başarısız (kod {exit_code}).", ui.ERROR)
+                if coc:
+                    coc.log_event(coc.EVENT_EXAM_ERROR, f"RAM process dump basarisiz (kod {exit_code}): {process_label}")
+                if report:
+                    report.finish(status="failed", output_path=out_path)
+                    self._save_report(report, os.path.dirname(out_path) or ".")
+        finally:
+            if incomplete_ops and op_id:
+                incomplete_ops.record_finish(op_id)
 
     def _run_full_mode(self):
         """AYNEN tasindi -- full mod Yonetici gerektirir; ShellExecute
@@ -214,6 +254,19 @@ class RamWorker(QThread):
         if coc:
             coc.log_event(coc.EVENT_EXAM_START, f"RAM full imaj baslatildi: {out_path}")
 
+        # bkz. _run_process_mode'daki AYNI gerekce -- gercek resume degil,
+        # sadece "basladi, bitirmedi" kaydi (bkz. incomplete_ops.py).
+        op_id = None
+        if incomplete_ops:
+            op_id = incomplete_ops.record_start(
+                "ram_full", "PhysicalMemory (full)",
+                details={
+                    "case_id": self.case, "examiner": self.examiner,
+                    "custodian": self.custodian, "organization": self.organization,
+                    "out_path": out_path,
+                },
+            )
+
         last_size = 0
         waited = 0
         while waited < 3600:  # full RAM uzun surebilir, 1 saate kadar bekle
@@ -249,13 +302,32 @@ class RamWorker(QThread):
 
             if coc:
                 coc.log_event(coc.EVENT_EXAM_END, f"RAM full imaj tamamlandi: {out_path}", vendor_hash)
+            # SHA-256 (vendor_hash) RamImagerCLI'nin kendi metadata'sindan
+            # geldigi icin dosya HENUZ okunmadi -- MD5/SHA-1 icin TEK bir
+            # okuma gerekiyor (SHA-256'yi tekrar hesaplamiyoruz, sadece
+            # md5/sha1 istiyoruz) -- oncesinde bu ikisi forensic_report.
+            # finish() icinde AYRI bir tam okuma ile hesaplaniyordu.
+            md5_hash = None
+            sha1_hash = None
+            if hash_file_multi and os.path.isfile(out_path):
+                try:
+                    ek_hashler = hash_file_multi(out_path, algorithms=("md5", "sha1"))
+                    md5_hash = ek_hashler.get("md5")
+                    sha1_hash = ek_hashler.get("sha1")
+                except (OSError, ValueError):
+                    pass
             if report:
                 report.finish(
                     status="success", output_path=out_path, image_hash=vendor_hash,
                     total_bytes=vendor_bytes or (os.path.getsize(out_path) if os.path.exists(out_path) else None),
+                    md5_hash=md5_hash, sha1_hash=sha1_hash,
                 )
                 rapor_yolu = self._save_report(report, os.path.dirname(out_path) or ".")
                 self.report_ready.emit(report, rapor_yolu)
+            # "Yarim Kalanlar" kaydi SADECE gercek basari durumunda
+            # kaldirilir -- bkz. asagidaki else dalindaki not.
+            if incomplete_ops and op_id:
+                incomplete_ops.record_finish(op_id)
         else:
             self.status.emit("Bitmedi ya da hata oluştu, günlüğe bakın.", ui.ERROR)
             if coc:
@@ -263,6 +335,15 @@ class RamWorker(QThread):
             if report:
                 report.finish(status="failed", output_path=out_path)
                 self._save_report(report, os.path.dirname(out_path) or ".")
+            # KASITLI OLARAK incomplete_ops.record_finish() cagirmiyoruz:
+            # RamImagerCLI ShellExecuteW ile ayrik/yukseltilmis baslatildigi
+            # icin bu thread'in sureci "kesin oldu" diye bilme sansi yok --
+            # 1 saatlik bekleme suresi dolup buraya dusulmus olabilir ama
+            # surec hala calisip birkaç dakika sonra dosyayi tamamliyor
+            # olabilir (kullanici bildirdi). Kaydi burada silersek "Yarim
+            # Kalanlar" listesi sureç hala surerken onu kaybeder -- ozelligin
+            # amacini bozar. Kayit "acik" kalir, kullanici daha sonra
+            # kontrol edip elle "yeniden baslat" ile temizleyebilir.
 
 
 class RamEngineWidget(QWidget):
@@ -318,12 +399,22 @@ class RamEngineWidget(QWidget):
         outer.addWidget(scroll, stretch=1)
 
         # === Vaka Bilgileri ===
+        # launcher icinden acilirken (on_back doluysa) vaka bilgileri zaten
+        # ayri bir on-ekranda (chameleon_gui.py._show_case_info) bir kez
+        # toplanip initial_* olarak buraya geciriliyor -- kart burada TEKRAR
+        # gosterilirse ayni alanlar iki kez sorulmus gibi kafa karistiriyordu
+        # (kullanici bildirdi). Alanlar (entry_case vb.) worker'in okuyabilmesi
+        # icin yine olusturuluyor, sadece ekranda GORUNMUYOR. Standalone
+        # calistirmada (on_back yok, ayri bir on-ekran da yok) kart gorunur
+        # kalir -- tek vaka bilgisi girisi orasi.
         vaka = widgets.Card("Vaka Bilgileri")
         vaka.body.addWidget(self._note("(İsteğe bağlı -- rapor üretmiyorsanız boş bırakabilirsiniz)"))
         self.entry_case = self._labeled_input(vaka.body, "Vaka No", initial_case_id)
         self.entry_examiner = self._labeled_input(vaka.body, "İnceleyen", initial_examiner)
         self.entry_custodian = self._labeled_input(vaka.body, "Cihaz Sahibi / Yetkili Kişi", initial_custodian)
         self.entry_organization = self._labeled_input(vaka.body, "Organizasyon", initial_organization)
+        if self.on_back:
+            vaka.hide()
         layout.addWidget(vaka)
 
         # === Mod secimi ===
@@ -601,6 +692,8 @@ class RamEngineWidget(QWidget):
         layout.addWidget(head)
 
         image_hash = d["integrity"]["image_hash"] or ""
+        md5_hash = d["integrity"]["md5_hash"] or ""
+        sha1_hash = d["integrity"]["sha1_hash"] or ""
         satirlar = [
             ("Vaka No", d["case"]["case_id"] or "—"),
             ("İnceleyen", d["case"]["examiner"] or "—"),
@@ -608,6 +701,8 @@ class RamEngineWidget(QWidget):
             ("Organizasyon", d["case"]["organization"] or "—"),
             ("Kaynak", d["acquisition"]["source_identifier"] or "—"),
             ("SHA-256", (image_hash[:24] + "…") if image_hash else "—"),
+            ("MD5", (md5_hash[:24] + "…") if md5_hash else "—"),
+            ("SHA-1", (sha1_hash[:24] + "…") if sha1_hash else "—"),
             ("Sonuç", d["result"]["status"]),
         ]
         for etiket, deger in satirlar:
