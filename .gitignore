@@ -42,6 +42,12 @@ images/
 # her kurulumda yerel/farkli olmali (bkz. src/shared/forensic_report.py)
 src/shared/data/
 
+# Proje diziniyle ilgisiz, baska bir arac tarafindan (CEF tabanli bir
+# uygulama/tarayici bilesni) burada birakilmis rastgele log dosyalari --
+# kod degil, is parcasi degil.
+CefDebug.log
+activity_log.txt
+
 # OS / editor
 .DS_Store
 Thumbs.db
