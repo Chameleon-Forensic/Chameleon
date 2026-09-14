@@ -119,13 +119,23 @@ ediyor; yeni bir tkinter alt modülü ya da üçüncü parti kütüphane
 eklenirse orası da güncellenmeli.
 
 Ayrıca `cd src && pyinstaller build_target_kit.spec` →
-`src/dist/ChameleonHedefKiti.exe`: sahaya götürülecek, SADECE hedef-taraf
-(Bu Cihaz İnceleniyor) modunu içeren, operatör araçları (SSH/RAM
-motorları, dolayısıyla `paramiko`) hiç paketlenmemiş ayrı bir derleme.
-Giriş noktası `src/launcher/target_kit_main.py` — `CHAMELEON_TARGET_ONLY`
-ortam değişkenini `chameleon_gui` import edilmeden önce ayarlar,
-`ChameleonWindow` bunu görünce rol seçim ekranını atlayıp doğrudan hedef
-sihirbazını açar. Aynı `chameleon_gui.py` kullanılır, kod tekrarlanmaz.
+`src/dist/ChameleonHedefKiti/` (klasör, içinde `ChameleonHedefKiti.exe` +
+`_internal/`): sahaya götürülecek, SADECE hedef-taraf (Bu Cihaz
+İnceleniyor) modunu içeren, operatör araçları (SSH/RAM motorları,
+dolayısıyla `paramiko`) hiç paketlenmemiş ayrı bir derleme. Giriş noktası
+`src/launcher/target_kit_main.py` — `CHAMELEON_TARGET_ONLY` ortam
+değişkenini `chameleon_gui` import edilmeden önce ayarlar, `ChameleonWindow`
+bunu görünce rol seçim ekranını atlayıp doğrudan hedef sihirbazını açar.
+Aynı `chameleon_gui.py` kullanılır, kod tekrarlanmaz.
+
+Bu çıktı bilinçli olarak `build.spec`'ten (tek dosya) farklı: **onedir**
+olarak paketleniyor. Onefile her çalıştırmada tüm içeriği
+`%TEMP%\_MEIxxxxx`'e açıp sonra siler — bu exe delil/hedef cihazında
+çalıştığı için, cihaza gereksiz geçici dosya yazıp silmek adli bütünlük
+açısından istenmeyen bir ayak izi. Onedir bulunduğu klasörden doğrudan
+çalışır, hedef makineye ekstra yazma yapmaz. Sahaya götürülürken klasörün
+TAMAMI ZIP'lenip taşınmalı (tek dosyayı kopyalayıp `_internal/`'i unutma
+riskine karşı).
 
 ## Test yaklaşımı
 
