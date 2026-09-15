@@ -67,6 +67,7 @@ STRINGS = {
         "field_custodian": "Cihaz Sahibi / Yetkili Kişi",
         "field_organization": "Organizasyon",
         "btn_continue": "Devam Et",
+        "btn_clear_case": "Temizle",
 
         # -- Bilgi Merkezi --
         "help_back_to_tool": "← Kaldığınız yere dön",
@@ -186,6 +187,7 @@ STRINGS = {
         "field_custodian": "Device Owner / Custodian",
         "field_organization": "Organization",
         "btn_continue": "Continue",
+        "btn_clear_case": "Clear",
 
         "help_back_to_tool": "← Back to where you were",
         "help_center_title": "Help Center",
@@ -301,6 +303,7 @@ STRINGS = {
         "field_custodian": "Propietario del Dispositivo / Custodio",
         "field_organization": "Organización",
         "btn_continue": "Continuar",
+        "btn_clear_case": "Limpiar",
 
         "help_back_to_tool": "← Volver a donde estaba",
         "help_center_title": "Centro de Ayuda",
@@ -417,6 +420,7 @@ STRINGS = {
         "field_custodian": "Geräteeigentümer / Verwahrer",
         "field_organization": "Organisation",
         "btn_continue": "Weiter",
+        "btn_clear_case": "Leeren",
 
         "help_back_to_tool": "← Zurück zur vorherigen Ansicht",
         "help_center_title": "Infocenter",
@@ -534,6 +538,7 @@ STRINGS = {
         "field_custodian": "Proprietário do Dispositivo / Custodiante",
         "field_organization": "Organização",
         "btn_continue": "Continuar",
+        "btn_clear_case": "Limpar",
 
         "help_back_to_tool": "← Voltar para onde estava",
         "help_center_title": "Central de Ajuda",
@@ -650,6 +655,7 @@ STRINGS = {
         "field_custodian": "Propriétaire de l'Appareil / Détenteur",
         "field_organization": "Organisation",
         "btn_continue": "Continuer",
+        "btn_clear_case": "Effacer",
 
         "help_back_to_tool": "← Revenir là où vous étiez",
         "help_center_title": "Centre d'Aide",

@@ -991,6 +991,12 @@ class ChameleonWindow(QMainWindow):
         # Ayni anda SADECE TEK bir aktif arac ekrani takip edilir.
         self._active_tool_widget = None
         self._active_tool_kind = None  # "ssh" | "ram"
+        # _show_case_info sayfasi her acilista SIFIRDAN (bos alanlarla)
+        # kuruluyordu -- kullanici bir yontemi secip vaka bilgilerini
+        # doldurduktan sonra "Geri" ile cikip tekrar girerse hepsi
+        # kayboluyordu (kullanici bildirdi). Son girilen degerler burada
+        # saklanip bir sonraki acilista alanlar bununla ONDOLDURULUYOR.
+        self._last_case = {}
         self._set_window_icon()
         # Sadece hedef-taraf (Bu Cihaz Inceleniyor) modunu iceren, daha
         # hafif/kafa karistirmayan ayri bir .exe icin (bkz. target_kit_main.py
@@ -1466,6 +1472,20 @@ class ChameleonWindow(QMainWindow):
             btn.setChecked(True)
 
     # -- Icerik alani ---------------------------------------------------
+    def _find_tool_widget(self, widget):
+        """widget dogrudan ForensicWidget/RamEngineWidget olabilir, YA DA
+        (stack_layout'a eklenen sey genelde oyle) onu SARAN bos bir QWidget
+        container olabilir (bkz. _open_ssh_engine/_open_ram_engine --
+        page_layout.addWidget(ssh_widget)) -- ikinci durumda gercek arac
+        widget'i, container'in Qt child'i olarak findChildren ile
+        bulunabiliyor. Sinif adina (isim ile, gercek sinifi import etmeden)
+        bakiyoruz -- bu iki sinif calisma aninda sys.path hilesiyle
+        yukleniyor (bkz. CONTRIBUTING.md)."""
+        for w in [widget] + widget.findChildren(QWidget):
+            if type(w).__name__ in ("ForensicWidget", "RamEngineWidget"):
+                return w
+        return None
+
     def _widget_has_running_worker(self, widget):
         """widget (ForensicWidget/RamEngineWidget) hala calisan bir isi
         (acq_worker/worker) tutuyor mu? DIKKAT: findChildren(QThread) burada
@@ -1478,38 +1498,59 @@ class ChameleonWindow(QMainWindow):
         -- ayni duzeltmeyle burada da giderildi). Bunun yerine widget'in
         KENDI worker attribute'unu (motor turune gore ismi farkli) dogrudan
         kontrol ediyoruz."""
-        def _worker_of(w):
-            return getattr(w, "acq_worker", None) or getattr(w, "worker", None)
+        tool = self._find_tool_widget(widget)
+        if tool is None:
+            return False
+        worker = getattr(tool, "acq_worker", None) or getattr(tool, "worker", None)
+        if worker is None:
+            return False
+        try:
+            return bool(worker.isRunning())
+        except RuntimeError:
+            # Qt C++ nesnesi zaten silinmis.
+            return False
 
-        # widget dogrudan ForensicWidget/RamEngineWidget olabilir, YA DA
-        # (stack_layout'a eklenen sey genelde oyle) onu SARAN bos bir
-        # QWidget container olabilir (bkz. _open_ssh_engine/_open_ram_engine
-        # -- page_layout.addWidget(ssh_widget)) -- ikinci durumda gercek
-        # arac widget'i, container'in Qt child'i olarak findChildren ile
-        # bulunabiliyor.
-        adaylar = [widget] + widget.findChildren(QWidget)
-        for w in adaylar:
-            worker = _worker_of(w)
-            if worker is None:
-                continue
+    def _widget_should_persist(self, widget):
+        """_widget_has_running_worker'in genisletilmis hali -- SADECE
+        "aktif calisiyor" degil, "kullanici henuz hicbir sey BITIRMEDI"
+        durumunu da korur. Onceden sadece calisan bir worker varsa
+        korunuyordu; formu doldurup HENUZ baslatmamis (Host/Port/Vaka
+        Bilgileri girilmis ama "Baglan"a hic basilmamis) bir ekran, "Geri"
+        ile Ana Sayfa'ya gidilince SIFIRDAN siliniyordu (kullanici bildirdi:
+        "vaka bilgilerini doldurup baglanti saglamadan geri donunce alan
+        sifirlaniyor, sifirlanmamali").
+
+        Kural: worker CALISIYORSA korunur (eskisiyle ayni). Worker
+        calismiyorsa ama HENUZ hicbir rapor uretilmediyse (_last_report
+        None -- ne hic baslatilmamis ne de basariyla/kismen tamamlanmis)
+        yine korunur -- boylece yari doldurulmus bir form ya da basarisiz
+        bir baglanti denemesi (rapor uretilmez) kaybolmaz, kullanici ayni
+        ekrana donup duzeltip tekrar deneyebilir. Bir rapor URETILDIYSE
+        (basarili/kismi tamamlanma) artik "bitmis" sayilir -- bir sonraki
+        girişte YENI bir vaka icin sifirdan baslanir (eski davranis)."""
+        tool = self._find_tool_widget(widget)
+        if tool is None:
+            return False
+        worker = getattr(tool, "acq_worker", None) or getattr(tool, "worker", None)
+        if worker is not None:
             try:
                 if worker.isRunning():
                     return True
             except RuntimeError:
-                # Qt C++ nesnesi zaten silinmis -- bu adayi atla.
-                continue
-        return False
+                pass
+        return getattr(tool, "_last_report", None) is None
 
     def _clear_content(self):
         while self.stack_layout.count():
             item = self.stack_layout.takeAt(0)
             w = item.widget()
             if w:
-                if w is self._active_tool_widget and self._widget_has_running_worker(w):
-                    # Aktif bir islem SURERKEN kullanici baska bir sayfaya
-                    # gidiyor -- ekran SILINMEDEN (deleteLater CAGIRMADAN)
-                    # sadece gizlenip saklanir (bkz. self._active_tool_widget
-                    # aciklamasi, __init__).
+                if w is self._active_tool_widget and self._widget_should_persist(w):
+                    # Aktif bir islem SURERKEN YA DA kullanici formu doldurup
+                    # HENUZ hicbir sey bitirmemisken baska bir sayfaya gidiyor
+                    # -- ekran SILINMEDEN (deleteLater CAGIRMADAN) sadece
+                    # gizlenip saklanir (bkz. self._active_tool_widget
+                    # aciklamasi, __init__, ve _widget_should_persist).
                     w.hide()
                     continue
                 # deleteLater() asenkron -- hemen ardindan silinecek widget
@@ -1531,13 +1572,13 @@ class ChameleonWindow(QMainWindow):
         return page
 
     def _resume_active_tool(self, kind):
-        """Aktif ekran + running-worker araniyorsa, onu (SIFIRDAN tanitim
-        sayfasi yerine) stack'e geri ekleyip True doner. Yoksa/baska
-        turdeyse/isi bitmisse False doner -- cagiran taraf normal akisina
-        (tanitim sayfasi) devam eder."""
+        """Aktif ekran korunmaya deger mi (bkz. _widget_should_persist) --
+        oyleyse onu (SIFIRDAN tanitim sayfasi yerine) stack'e geri ekleyip
+        True doner. Yoksa/baska turdeyse/isi bitmisse False doner -- cagiran
+        taraf normal akisina (tanitim sayfasi) devam eder."""
         if self._active_tool_kind != kind or self._active_tool_widget is None:
             return False
-        if not self._widget_has_running_worker(self._active_tool_widget):
+        if not self._widget_should_persist(self._active_tool_widget):
             self._active_tool_widget = None
             self._active_tool_kind = None
             return False
@@ -1787,6 +1828,11 @@ class ChameleonWindow(QMainWindow):
             lbl.setFixedWidth(190)
             row.addWidget(lbl)
             entry = widgets.Input()
+            # Son girilen degerlerle ONDOLDURULUYOR (bkz. self._last_case,
+            # __init__) -- "Geri" ile cikip tekrar girildiginde bos
+            # baslamasin diye (kullanici bildirdi). Ilk acilista/hicbir sey
+            # girilmediyse bos kalir (normal).
+            entry.setText(self._last_case.get(key, ""))
             row.addWidget(entry)
             card.body.addLayout(row)
             entries[key] = entry
@@ -1815,12 +1861,25 @@ class ChameleonWindow(QMainWindow):
         card.body.addLayout(tz_row)
 
         def _continue():
-            on_continue({k: e.text().strip() for k, e in entries.items()})
+            case = {k: e.text().strip() for k, e in entries.items()}
+            self._last_case = case
+            on_continue(case)
+
+        def _clear():
+            # Kullanicinin bilerek alanlari sifirlamasi icin -- otomatik
+            # ondoldurma istenmiyorsa buradan temizlenebilir (kullanici
+            # onerdi).
+            self._last_case = {}
+            for e in entries.values():
+                e.setText("")
 
         cont_btn = widgets.PrimaryButton(t("btn_continue", lang))
         cont_btn.clicked.connect(_continue)
+        clear_btn = widgets.SecondaryButton(t("btn_clear_case", lang))
+        clear_btn.clicked.connect(_clear)
         cont_row = QHBoxLayout()
         cont_row.addWidget(cont_btn)
+        cont_row.addWidget(clear_btn)
         cont_row.addStretch()
         card.body.addLayout(cont_row)
 
@@ -1900,11 +1959,14 @@ class ChameleonWindow(QMainWindow):
 
     def _release_return_page(self):
         """_return_page'i (varsa) birakir. Icinde HALA CALISAN bir worker
-        (orn. devam eden bir SSH imaj alma islemi) varsa ONU SESSIZCE
-        SILMEZ -- bir adli bilisim aracinda yari yolda kesilen bir alma
-        islemi, ekranda gorunmeyen bir sayfada saklı kalmasindan cok daha
-        kotu bir sonuc olurdu. Boyle bir durumda sayfa OLDUGU GIBI birakilir,
-        is bitene kadar bir sonraki cagrida tekrar kontrol edilir.
+        (orn. devam eden bir SSH imaj alma islemi) VARSA YA DA kullanici
+        formu doldurup HENUZ hicbir sey bitirmediyse (bkz.
+        _widget_should_persist) ONU SESSIZCE SILMEZ -- bir adli bilisim
+        aracinda yari yolda kesilen bir alma islemi ya da doldurulmus bir
+        formun kaybolmasi, ekranda gorunmeyen bir sayfada saklı kalmasindan
+        cok daha kotu bir sonuc olurdu. Boyle bir durumda sayfa OLDUGU GIBI
+        birakilir, is bitene/kullanici bilerek vazgecene kadar bir sonraki
+        cagrida tekrar kontrol edilir.
 
         NOT: onceden findChildren(QThread) ile generic bir arama yapiliyordu
         ama bu HICBIR ZAMAN GERCEKTE calismiyordu -- worker'lar (acq_worker/
@@ -1915,11 +1977,10 @@ class ChameleonWindow(QMainWindow):
         FIILEN hicbir zaman calismamis oldu -- gercek bir bug, bkz.
         docs/hatalar_ve_sonuclar.md). Duzeltme: findChildren(QWidget) ile
         ICERIDEKI arac widget'larini (ForensicWidget/RamEngineWidget) bulup
-        HER birinin KENDI worker attribute'unu _widget_has_running_worker
-        ile kontrol ediyoruz."""
+        HER birinin _widget_should_persist ile kontrol ediyoruz."""
         if self._return_page is None:
             return
-        if any(self._widget_has_running_worker(w) for w in self._return_page.findChildren(QWidget)):
+        if any(self._widget_should_persist(w) for w in self._return_page.findChildren(QWidget)):
             return
         self._return_page.deleteLater()
         self._return_page = None

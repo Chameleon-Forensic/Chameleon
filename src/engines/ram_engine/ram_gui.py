@@ -357,6 +357,11 @@ class RamEngineWidget(QWidget):
         self.on_show_help = on_show_help
         self._pid_map = {}
         self.worker = None
+        # launcher'in chameleon_gui._widget_should_persist'i okuyor -- None
+        # iken (hic islem bitmemisken) ekran "Geri" ile Ana Sayfa'ya
+        # gidilince SILINMIYOR, doldurulmus alanlar kaybolmuyor. gui_v2.py'
+        # deki _last_report ile AYNI desen/isim, bkz. o dosyadaki aciklama.
+        self._last_report = None
         self._display_timezone = display_timezone
         self._build_ui(initial_case_id, initial_examiner, initial_custodian, initial_organization)
         self._refresh_processes()
@@ -673,6 +678,9 @@ class RamEngineWidget(QWidget):
         raporunu ozet olarak sunar, tam hali (report.html) icin buton verir."""
         if report is None or report_path is None:
             return
+        # bkz. self._last_report aciklamasi (__init__) -- bir rapor
+        # URETILDI, ekran artik "bitmis" sayilir.
+        self._last_report = report
 
         html_path = os.path.splitext(report_path)[0] + ".html"
 
