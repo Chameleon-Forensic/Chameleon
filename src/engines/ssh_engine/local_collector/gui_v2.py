@@ -57,6 +57,9 @@ DEFAULT_IMAGE_PATH = os.path.join(_PERSISTENT_ROOT, "images", "forensic_image.ra
 _SHARED_DIR = os.path.join(PROJECT_ROOT, "..", "..", "shared")
 if os.path.isdir(_SHARED_DIR):
     sys.path.insert(0, _SHARED_DIR)
+_I18N_DIR = os.path.join(_SHARED_DIR, "i18n")
+if os.path.isdir(_I18N_DIR):
+    sys.path.insert(0, _I18N_DIR)
 
 # Vaka verisiyle (case_history.json, forensic_report.HISTORY_DIR) AYNI
 # klasor -- .gitignore'daki "shared/data/" zaten kapsiyor, kisisel/vaka
@@ -92,6 +95,7 @@ def _save_recent_host(host, port, username):
         pass
 from ui_kit import theme_qt as ui, fonts, icons, widgets  # noqa: E402
 from help_content import get_topic  # noqa: E402
+from strings import t  # noqa: E402
 
 try:
     from forensic_report import ForensicReport
@@ -965,21 +969,22 @@ class VerifyWorker(QThread):
 # file_acquirer.py/windows_acquirer.py).
 # ---------------------------------------------------------------------------
 class RemoteBrowseDialog(QDialog):
-    def __init__(self, ssh, target_os, start_path, parent=None):
+    def __init__(self, ssh, target_os, start_path, lang="tr", parent=None):
         super().__init__(parent)
         self.ssh = ssh
         self.target_os = target_os  # "linux" / "windows"
         self.current_path = start_path
         self.selected_path = None
+        self.lang = lang
 
-        self.setWindowTitle("Uzak Klasör/Dosya Seç")
+        self.setWindowTitle(t("tool_remote_browse_title", self.lang))
         self.setStyleSheet(f"background-color:{ui.BG_SURFACE};")
         self.resize(560, 420)
 
         layout = QVBoxLayout(self)
 
         path_row = QHBoxLayout()
-        up_btn = widgets.SecondaryButton("↑ Yukarı")
+        up_btn = widgets.SecondaryButton(t("tool_up", self.lang))
         up_btn.clicked.connect(self._go_up)
         path_row.addWidget(up_btn)
         self.path_label = widgets.MonoLabel(self.current_path)
@@ -997,11 +1002,11 @@ class RemoteBrowseDialog(QDialog):
         layout.addWidget(self.status_label)
 
         btn_row = QHBoxLayout()
-        select_folder_btn = widgets.PrimaryButton("Bu Klasörü Seç")
+        select_folder_btn = widgets.PrimaryButton(t("tool_select_folder", self.lang))
         select_folder_btn.clicked.connect(self._select_current_folder)
         btn_row.addWidget(select_folder_btn)
         btn_row.addStretch()
-        cancel_btn = widgets.SecondaryButton("İptal")
+        cancel_btn = widgets.SecondaryButton(t("btn_cancel", self.lang))
         cancel_btn.clicked.connect(self.reject)
         btn_row.addWidget(cancel_btn)
         layout.addLayout(btn_row)
@@ -1018,12 +1023,12 @@ class RemoteBrowseDialog(QDialog):
         self.list_widget.clear()
         entries = self._list_dir(self.current_path)
         if entries is None:
-            self.status_label.setText("Klasör okunamadı (izin yok ya da yol bulunamadı).")
+            self.status_label.setText(t("tool_folder_read_error", self.lang))
             return
         if not entries:
-            self.status_label.setText("(boş klasör)")
+            self.status_label.setText(t("tool_empty_folder", self.lang))
             return
-        self.status_label.setText(f"{len(entries)} öge")
+        self.status_label.setText(t("tool_item_count", self.lang, count=len(entries)))
         for name, is_dir in entries:
             item = QListWidgetItem(icons.icon("folder" if is_dir else "file-text", color=ui.TEXT_MAIN, size=16), name)
             item.setData(Qt.ItemDataRole.UserRole, (name, is_dir))
@@ -1066,7 +1071,7 @@ class RemoteBrowseDialog(QDialog):
 class ForensicWidget(QWidget):
     def __init__(self, on_back=None, on_show_help=None, initial_case_id="", initial_examiner="",
                  initial_custodian="", initial_organization="", initial_connection_method=None,
-                 display_timezone=None, parent=None):
+                 display_timezone=None, lang="tr", parent=None):
         """
         initial_connection_method: launcher'dan hangi yontem sayfasi
         ("direct"/"vpn"/"tor") ile buraya girildiyse burada gelir. VERILDIYSE
@@ -1086,6 +1091,7 @@ class ForensicWidget(QWidget):
         # calistirmasinda None kalir, bu durumda _show_help_topic() ayni
         # icerigi kucuk bir dialogda gosterir (bkz. asagisi).
         self.on_show_help = on_show_help
+        self.lang = lang or "tr"
         self._initial_case_id = initial_case_id
         self._initial_examiner = initial_examiner
         self._initial_custodian = initial_custodian
@@ -1106,7 +1112,7 @@ class ForensicWidget(QWidget):
         self._operator_public_key = None
 
         if not PARAMIKO_OK:
-            self._pending_error = f"paramiko kurulu değil:\n{IMPORT_ERROR}\n\nKurmak için: pip install paramiko"
+            self._pending_error = t("tool_paramiko_missing", self.lang, exc=IMPORT_ERROR)
             layout = QVBoxLayout(self)
             lbl = QLabel(self._pending_error)
             lbl.setStyleSheet(f"color:{ui.ERROR};")
@@ -1114,7 +1120,7 @@ class ForensicWidget(QWidget):
             return
 
         self._build_ui()
-        self._log("Program başladı. SSH bilgilerini girin ve 'Bağlan' tuşuna basın.", "info")
+        self._log(t("tool_startup_log", self.lang), "info")
 
     # -- UI Olusturma -------------------------------------------------------
     def _build_ui(self):
@@ -1125,10 +1131,10 @@ class ForensicWidget(QWidget):
         header = QHBoxLayout()
         header.setContentsMargins(20, 14, 20, 14)
         if self.on_back:
-            back_btn = widgets.SecondaryButton("← Geri")
+            back_btn = widgets.SecondaryButton(t("btn_back", self.lang))
             back_btn.clicked.connect(self.on_back)
             header.addWidget(back_btn)
-        title = QLabel("SSH ile Uzak İmaj Al")
+        title = QLabel(t("tool_ssh_title", self.lang))
         title.setStyleSheet(f"color:{ui.TEXT_MAIN}; font-family:'{ui.FONT_UI}'; font-size:{ui.SIZE_TITLE}px; font-weight:600;")
         header.addWidget(title)
         header.addStretch()
@@ -1159,35 +1165,35 @@ class ForensicWidget(QWidget):
         # (entry_case_id vb.) worker'in okuyabilmesi icin yine olusturuluyor,
         # sadece ekranda GORUNMUYOR. Standalone calistirmada (on_back yok)
         # kart gorunur kalir -- tek vaka bilgisi girisi orasi.
-        vaka = widgets.Card("Vaka Bilgileri")
-        note = QLabel("(İsteğe bağlı -- rapor üretmiyorsanız boş bırakabilirsiniz)")
+        vaka = widgets.Card(t("case_info_title", self.lang))
+        note = QLabel(t("case_info_note", self.lang))
         note.setStyleSheet(f"color:{ui.TEXT_SECONDARY}; font-family:'{ui.FONT_UI}'; font-size:{ui.SIZE_HELPER}px; font-style:italic;")
         vaka.body.addWidget(note)
-        self.entry_case_id = self._labeled_row(vaka.body, "Vaka No", self._initial_case_id)
-        self.entry_examiner = self._labeled_row(vaka.body, "İnceleyen", self._initial_examiner)
-        self.entry_custodian = self._labeled_row(vaka.body, "Cihaz Sahibi / Yetkili Kişi", self._initial_custodian)
-        self.entry_organization = self._labeled_row(vaka.body, "Organizasyon", self._initial_organization)
+        self.entry_case_id = self._labeled_row(vaka.body, t("field_case_id", self.lang), self._initial_case_id)
+        self.entry_examiner = self._labeled_row(vaka.body, t("field_examiner", self.lang), self._initial_examiner)
+        self.entry_custodian = self._labeled_row(vaka.body, t("field_custodian", self.lang), self._initial_custodian)
+        self.entry_organization = self._labeled_row(vaka.body, t("field_organization", self.lang), self._initial_organization)
         if self.on_back:
             vaka.hide()
         body.addWidget(vaka)
 
         # === Baglanti Yontemi ===
         self.conn_method_value = self._initial_connection_method or "direct"
-        yontem = widgets.Card("Bağlantı Yöntemi")
+        yontem = widgets.Card(t("tool_conn_method_card", self.lang))
         if self._method_locked:
-            method_names = {"direct": "Doğrudan / Port Yönlendirme", "vpn": "VPN", "tor": "Tor (Acil Durum)"}
-            lbl = QLabel(f"Seçili yöntem: {method_names.get(self.conn_method_value, self.conn_method_value)}")
+            method_names = {"direct": t("nav_direct", self.lang), "vpn": t("nav_vpn", self.lang), "tor": t("nav_tor", self.lang)}
+            lbl = QLabel(t("tool_selected_method", self.lang, method=method_names.get(self.conn_method_value, self.conn_method_value)))
             lbl.setStyleSheet(f"color:{ui.TEXT_MAIN}; font-family:'{ui.FONT_UI}'; font-size:{ui.SIZE_BODY}px; font-weight:600;")
             yontem.body.addWidget(lbl)
-            hint = QLabel("(Yöntemi değiştirmek için \"Geri\" ile ana sayfaya dönüp farklı bir yöntem seçin.)")
+            hint = QLabel(t("tool_change_method_hint", self.lang))
             hint.setStyleSheet(f"color:{ui.TEXT_SECONDARY}; font-family:'{ui.FONT_UI}'; font-size:{ui.SIZE_HELPER}px;")
             yontem.body.addWidget(hint)
         else:
             row = QHBoxLayout()
             self.method_group = QButtonGroup(self)
-            self.radio_direct = widgets.RadioButton("Doğrudan / Port Yönlendirme")
-            self.radio_vpn = widgets.RadioButton("VPN")
-            self.radio_tor = widgets.RadioButton("Tor (Acil Durum)")
+            self.radio_direct = widgets.RadioButton(t("nav_direct", self.lang))
+            self.radio_vpn = widgets.RadioButton(t("nav_vpn", self.lang))
+            self.radio_tor = widgets.RadioButton(t("nav_tor", self.lang))
             self.radio_direct.setChecked(True)
             for r, val in [(self.radio_direct, "direct"), (self.radio_vpn, "vpn"), (self.radio_tor, "tor")]:
                 self.method_group.addButton(r)
@@ -1203,13 +1209,13 @@ class ForensicWidget(QWidget):
         body.addWidget(yontem)
 
         # === SSH Baglanti Bilgileri ===
-        conn = widgets.Card("SSH Bağlantı Bilgileri")
+        conn = widgets.Card(t("tool_ssh_conn_card", self.lang))
         row1 = QHBoxLayout()
-        row1.addWidget(QLabel("Host:"))
+        row1.addWidget(QLabel(t("tool_host_label", self.lang)))
         self.entry_host = widgets.MonoInput()
         self.entry_host.setText("192.168.1.100")
         row1.addWidget(self.entry_host)
-        row1.addWidget(QLabel("Port:"))
+        row1.addWidget(QLabel(t("tool_port_label", self.lang)))
         self.entry_port = widgets.MonoInput()
         self.entry_port.setText("22")
         self.entry_port.setFixedWidth(70)
@@ -1217,10 +1223,10 @@ class ForensicWidget(QWidget):
         conn.body.addLayout(row1)
 
         row2 = QHBoxLayout()
-        row2.addWidget(QLabel("Kullanıcı:"))
+        row2.addWidget(QLabel(t("tool_user_label", self.lang)))
         self.entry_user = widgets.Input()
         row2.addWidget(self.entry_user)
-        row2.addWidget(QLabel("Şifre:"))
+        row2.addWidget(QLabel(t("tool_password_label", self.lang)))
         self.entry_pass = widgets.Input()
         self.entry_pass.setEchoMode(QLineEdit.EchoMode.Password)
         row2.addWidget(self.entry_pass)
@@ -1234,24 +1240,24 @@ class ForensicWidget(QWidget):
             completer.activated[str].connect(self._on_recent_host_picked)
 
         row3 = QHBoxLayout()
-        row3.addWidget(QLabel("SSH Anahtar:"))
+        row3.addWidget(QLabel(t("tool_ssh_key_label", self.lang)))
         self.entry_key = widgets.MonoInput()
         row3.addWidget(self.entry_key)
-        browse_key_btn = widgets.SecondaryButton("Gözat")
+        browse_key_btn = widgets.SecondaryButton(t("btn_browse", self.lang))
         browse_key_btn.clicked.connect(self._browse_key)
         row3.addWidget(browse_key_btn)
         conn.body.addLayout(row3)
 
         # === Sunucu Kimlik Dogrulama (host key) ===
         self.strict_host_key_value = True
-        hk_label = QLabel("Sunucu Kimlik Doğrulama:")
+        hk_label = QLabel(t("tool_hostkey_verification_label", self.lang))
         hk_label.setStyleSheet(f"color:{ui.TEXT_MAIN}; font-family:'{ui.FONT_UI}'; font-size:{ui.SIZE_HELPER}px; font-weight:600;")
         conn.body.addWidget(hk_label)
 
         hk_row = QHBoxLayout()
         self.hostkey_group = QButtonGroup(self)
-        self.radio_hostkey_strict = widgets.RadioButton("Sıkı doğrula (önerilen)")
-        self.radio_hostkey_skip = widgets.RadioButton("Doğrulamayı atla")
+        self.radio_hostkey_strict = widgets.RadioButton(t("tool_hostkey_strict", self.lang))
+        self.radio_hostkey_skip = widgets.RadioButton(t("tool_hostkey_skip", self.lang))
         self.radio_hostkey_strict.setChecked(True)
         for r in (self.radio_hostkey_strict, self.radio_hostkey_skip):
             self.hostkey_group.addButton(r)
@@ -1260,30 +1266,21 @@ class ForensicWidget(QWidget):
         hk_row.addStretch()
         conn.body.addLayout(hk_row)
 
-        hk_hint = QLabel(
-            "Sıkı doğrulama, sunucunun kimliğini kontrol ederek yanlış bir cihaza "
-            "bağlanmayı önler ve genelde önerilir. Daha önce hiç bağlanılmamış bir "
-            "sunucuda bu kontrol bağlantıyı engelleyebilir; böyle durumlarda ve "
-            "güvendiğiniz bir ağdaysanız (doğrudan kablo, kendi kurduğunuz hotspot vb.) "
-            "doğrulamayı atlayabilirsiniz. Tor (Acil Durum) modunda \"güvenilir ağ\" "
-            "kavramı geçerli değildir -- oradaki asıl güvenlik operatör anahtarıdır "
-            "(bkz. Bilgi Merkezi), bu yüzden Tor'da atlamayı sadece anahtarı doğru "
-            "kişiden aldığınızdan eminseniz seçin."
-        )
+        hk_hint = QLabel(t("tool_hostkey_hint", self.lang))
         hk_hint.setWordWrap(True)
         hk_hint.setStyleSheet(f"color:{ui.TEXT_SECONDARY}; font-family:'{ui.FONT_UI}'; font-size:{ui.SIZE_HELPER}px;")
         conn.body.addWidget(hk_hint)
 
         conn.body.addWidget(self._help_link("host_key_verification"))
 
-        self.hk_warn = QLabel("Bu tercih delil zincirine ayrıca kaydedilir.")
+        self.hk_warn = QLabel(t("tool_hostkey_coc_note", self.lang))
         self.hk_warn.setWordWrap(True)
         self.hk_warn.setStyleSheet(f"color:{ui.TEXT_SECONDARY}; font-family:'{ui.FONT_UI}'; font-size:{ui.SIZE_HELPER}px;")
         self.hk_warn.setVisible(False)
         conn.body.addWidget(self.hk_warn)
 
         connect_row = QHBoxLayout()
-        self.btn_connect = widgets.PrimaryButton("Bağlan ve Diskleri Listele")
+        self.btn_connect = widgets.PrimaryButton(t("tool_btn_connect", self.lang))
         self.btn_connect.clicked.connect(self._connect)
         connect_row.addWidget(self.btn_connect)
         connect_row.addStretch()
@@ -1291,11 +1288,11 @@ class ForensicWidget(QWidget):
         body.addWidget(conn)
 
         # === Hedef Isletim Sistemi ===
-        os_card = widgets.Card("Hedef İşletim Sistemi")
+        os_card = widgets.Card(t("tool_target_os_card", self.lang))
         os_row = QHBoxLayout()
         self.os_group = QButtonGroup(self)
-        self.radio_os_linux = widgets.RadioButton("Linux (dd / bash)")
-        self.radio_os_windows = widgets.RadioButton("Windows (PowerShell)")
+        self.radio_os_linux = widgets.RadioButton(t("tool_os_linux", self.lang))
+        self.radio_os_windows = widgets.RadioButton(t("tool_os_windows", self.lang))
         self.radio_os_linux.setChecked(True)
         for r in (self.radio_os_linux, self.radio_os_windows):
             self.os_group.addButton(r)
@@ -1306,11 +1303,11 @@ class ForensicWidget(QWidget):
         body.addWidget(os_card)
 
         # === Ne Alinacak ===
-        acq_card = widgets.Card("Ne Alınacak?")
+        acq_card = widgets.Card(t("tool_what_card", self.lang))
         acq_row = QHBoxLayout()
         self.acq_group = QButtonGroup(self)
-        self.radio_acq_disk = widgets.RadioButton("Tam Disk")
-        self.radio_acq_file = widgets.RadioButton("Dosya ya da Klasör")
+        self.radio_acq_disk = widgets.RadioButton(t("tool_acq_full_disk", self.lang))
+        self.radio_acq_file = widgets.RadioButton(t("tool_acq_file_folder", self.lang))
         self.radio_acq_disk.setChecked(True)
         for r in (self.radio_acq_disk, self.radio_acq_file):
             self.acq_group.addButton(r)
@@ -1321,15 +1318,15 @@ class ForensicWidget(QWidget):
         body.addWidget(acq_card)
 
         # === Hedef Disk ve Islem Modu ===
-        self.disk_card = widgets.Card("Hedef Disk ve İşlem Modu")
+        self.disk_card = widgets.Card(t("tool_disk_mode_card", self.lang))
         disk_row1 = QHBoxLayout()
-        self.lbl_disk_path = QLabel("Disk (örn. /dev/sdb):")
+        self.lbl_disk_path = QLabel(t("tool_disk_path_label", self.lang))
         disk_row1.addWidget(self.lbl_disk_path)
         self.entry_disk = widgets.MonoInput()
         disk_row1.addWidget(self.entry_disk)
         self.mode_group = QButtonGroup(self)
-        self.radio_live = widgets.RadioButton("Live Acquisition")
-        self.radio_offline = widgets.RadioButton("Offline Acquisition")
+        self.radio_live = widgets.RadioButton(t("tool_live_acq", self.lang))
+        self.radio_offline = widgets.RadioButton(t("tool_offline_acq", self.lang))
         self.radio_live.setChecked(True)
         for r in (self.radio_live, self.radio_offline):
             self.mode_group.addButton(r)
@@ -1338,17 +1335,17 @@ class ForensicWidget(QWidget):
         self.disk_card.body.addWidget(self._help_link("live_vs_offline_acquisition"))
 
         disk_row2 = QHBoxLayout()
-        disk_row2.addWidget(QLabel("İmaj Çıktı Yolu:"))
+        disk_row2.addWidget(QLabel(t("tool_image_out_label", self.lang)))
         self.entry_out = widgets.MonoInput()
         self.entry_out.setText(DEFAULT_IMAGE_PATH)
         disk_row2.addWidget(self.entry_out, stretch=1)
-        browse_out_btn = widgets.SecondaryButton("Gözat")
+        browse_out_btn = widgets.SecondaryButton(t("btn_browse", self.lang))
         browse_out_btn.clicked.connect(self._browse_out)
         disk_row2.addWidget(browse_out_btn)
         self.disk_card.body.addLayout(disk_row2)
 
         disk_row3 = QHBoxLayout()
-        disk_row3.addWidget(QLabel("Blok Boyutu:"))
+        disk_row3.addWidget(QLabel(t("tool_block_size_label", self.lang)))
         self.combo_block_size = QComboBox()
         self.combo_block_size.addItems(["4 MB", "16 MB", "32 MB", "64 MB"])
         self.combo_block_size.setStyleSheet(f"""
@@ -1366,12 +1363,12 @@ class ForensicWidget(QWidget):
         # segmentli cikti, tek dosyaya gore ekstra bir adim oldugu icin
         # sadece gercekten gerektiginde acikca secilmeli.
         disk_row4 = QHBoxLayout()
-        disk_row4.addWidget(QLabel("Segment Boyutu:"))
+        disk_row4.addWidget(QLabel(t("tool_segment_size_label", self.lang)))
         self.combo_segment_size = QComboBox()
-        self.combo_segment_size.addItem("Bölme Yok (Tek Dosya)", None)
-        self.combo_segment_size.addItem("650 MB (CD)", 650 * 1024 * 1024)
-        self.combo_segment_size.addItem("2 GB (FAT32 için önerilen)", 2 * 1024 * 1024 * 1024)
-        self.combo_segment_size.addItem("4 GB (FAT32 sınırı)", 4 * 1000 * 1000 * 1000)
+        self.combo_segment_size.addItem(t("tool_segment_none", self.lang), None)
+        self.combo_segment_size.addItem(t("tool_segment_650mb", self.lang), 650 * 1024 * 1024)
+        self.combo_segment_size.addItem(t("tool_segment_2gb", self.lang), 2 * 1024 * 1024 * 1024)
+        self.combo_segment_size.addItem(t("tool_segment_4gb", self.lang), 4 * 1000 * 1000 * 1000)
         self.combo_segment_size.setStyleSheet(f"""
             QComboBox {{ background-color:{ui.BG_LAYER2}; color:{ui.TEXT_MAIN};
                 border:1px solid {ui.BORDER}; border-radius:{ui.RADIUS}px; padding:4px 8px; }}
@@ -1385,7 +1382,7 @@ class ForensicWidget(QWidget):
         # resume ihtimaline karsi zaten korunuyor (concatenate_blocks
         # cleanup=False), sikistirma o senaryoda ekstra bir adim/risk
         # olurdu. Mod degisince _on_mode_change ile devre disi/acik yapilir.
-        self.check_compress = widgets.Checkbox("Sıkıştır (gzip) -- disk alanından tasarruf sağlar")
+        self.check_compress = widgets.Checkbox(t("tool_compress_checkbox", self.lang))
         self.check_compress.setEnabled(False)
         self.disk_card.body.addWidget(self.check_compress)
 
@@ -1395,31 +1392,28 @@ class ForensicWidget(QWidget):
         body.addWidget(self.disk_card)
 
         # === Hedef Dosya/Klasor ===
-        self.file_card = widgets.Card("Hedef Dosya/Klasör")
+        self.file_card = widgets.Card(t("tool_file_folder_card", self.lang))
         file_row1 = QHBoxLayout()
-        self.lbl_remote_path = QLabel("Uzak Yol (örn. /home/user/belgeler):")
+        self.lbl_remote_path = QLabel(t("tool_remote_path_label", self.lang))
         file_row1.addWidget(self.lbl_remote_path)
         self.entry_remote_path = widgets.MonoInput()
         file_row1.addWidget(self.entry_remote_path, stretch=1)
-        browse_remote_btn = widgets.SecondaryButton("Gözat")
+        browse_remote_btn = widgets.SecondaryButton(t("btn_browse", self.lang))
         browse_remote_btn.clicked.connect(self._browse_remote_path)
         file_row1.addWidget(browse_remote_btn)
         self.file_card.body.addLayout(file_row1)
 
         file_row2 = QHBoxLayout()
-        file_row2.addWidget(QLabel("Çıktı Klasörü:"))
+        file_row2.addWidget(QLabel(t("tool_output_folder_label", self.lang)))
         self.entry_file_out = widgets.MonoInput()
         self.entry_file_out.setText(os.path.join(_PERSISTENT_ROOT, "images", "dosyalar"))
         file_row2.addWidget(self.entry_file_out, stretch=1)
-        browse_file_out_btn = widgets.SecondaryButton("Gözat")
+        browse_file_out_btn = widgets.SecondaryButton(t("btn_browse", self.lang))
         browse_file_out_btn.clicked.connect(self._browse_file_out)
         file_row2.addWidget(browse_file_out_btn)
         self.file_card.body.addLayout(file_row2)
 
-        file_warn = QLabel(
-            "Bu modda write-blocker uygulanmaz (dosya/klasör seviyesinde anlamlı değil) -- "
-            "disk her zaman olduğu gibi, kilitlenmeden okunur."
-        )
+        file_warn = QLabel(t("tool_file_mode_warn", self.lang))
         file_warn.setWordWrap(True)
         file_warn.setStyleSheet(f"color:{ui.WARNING}; font-family:'{ui.FONT_UI}'; font-size:{ui.SIZE_HELPER}px;")
         self.file_card.body.addWidget(file_warn)
@@ -1428,14 +1422,14 @@ class ForensicWidget(QWidget):
 
         # === Butonlar ===
         btn_row = QHBoxLayout()
-        self.btn_acquire = widgets.PrimaryButton("İmaj Almayı Başlat")
+        self.btn_acquire = widgets.PrimaryButton(t("tool_btn_start_acquisition", self.lang))
         self.btn_acquire.clicked.connect(self._start_acquisition)
         btn_row.addWidget(self.btn_acquire)
-        verify_btn = widgets.SecondaryButton("İmaj Doğrula")
+        verify_btn = widgets.SecondaryButton(t("tool_btn_verify_image", self.lang))
         verify_btn.clicked.connect(self._verify_image)
         btn_row.addWidget(verify_btn)
         btn_row.addStretch()
-        clear_btn = widgets.SecondaryButton("Log Temizle")
+        clear_btn = widgets.SecondaryButton(t("tool_btn_clear_log", self.lang))
         clear_btn.clicked.connect(self._clear_log)
         btn_row.addWidget(clear_btn)
         body.addLayout(btn_row)
@@ -1443,15 +1437,15 @@ class ForensicWidget(QWidget):
         # === Ilerleme ===
         self.progress = widgets.ProgressBar()
         body.addWidget(self.progress)
-        self.status_label = QLabel("Bekleniyor...")
+        self.status_label = QLabel(t("tool_status_waiting", self.lang))
         self.status_label.setStyleSheet(f"color:{ui.TEXT_SECONDARY}; font-family:'{ui.FONT_UI}'; font-size:{ui.SIZE_HELPER}px; font-style:italic;")
         body.addWidget(self.status_label)
 
         # === Log ===
-        log_card = widgets.Card("İşlem Logu")
+        log_card = widgets.Card(t("tool_log_card", self.lang))
         help_links_row = QHBoxLayout()
-        help_links_row.addWidget(self._help_link("chain_of_custody", "Delil zinciri nedir?"))
-        help_links_row.addWidget(self._help_link("hash_verification", "Hash doğrulaması nedir?"))
+        help_links_row.addWidget(self._help_link("chain_of_custody", t("tool_help_link_coc", self.lang)))
+        help_links_row.addWidget(self._help_link("hash_verification", t("tool_help_link_hash", self.lang)))
         help_links_row.addStretch()
         log_card.body.addLayout(help_links_row)
         self.txt_log = QTextEdit()
@@ -1484,12 +1478,7 @@ class ForensicWidget(QWidget):
         panel = QWidget()
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(0, 6, 0, 0)
-        note = QLabel(
-            "Bilgisayarınız zaten hedef ağa VPN ile bağlıysa bu modu kullanın. Host alanına "
-            "hedefin VPN üzerinden erişilebilir IP'sini yazın -- bağlantı doğrudan SSH ile "
-            "kurulur (Tor gibi ekstra bir katman yok), sadece delil zincirinde VPN kullanıldığı "
-            "ayrıca kayıt altına alınır."
-        )
+        note = QLabel(t("tool_vpn_note", self.lang))
         note.setWordWrap(True)
         note.setStyleSheet(f"color:{ui.TEXT_MAIN}; font-family:'{ui.FONT_UI}'; font-size:{ui.SIZE_HELPER}px;")
         layout.addWidget(note)
@@ -1501,49 +1490,30 @@ class ForensicWidget(QWidget):
         layout.setContentsMargins(0, 6, 0, 0)
         layout.setSpacing(6)
 
-        heading = QLabel("Tor (Acil Durum) nedir?")
+        heading = QLabel(t("tool_tor_heading", self.lang))
         heading.setStyleSheet(f"color:{ui.ACCENT_TEXT}; font-family:'{ui.FONT_UI}'; font-size:{ui.SIZE_HELPER}px; font-weight:600;")
         layout.addWidget(heading)
 
-        what = QLabel(
-            "Hedef ağa hiçbir erişiminiz/yetkiniz olmadığında (örn. şirket SSH'ı tamamen "
-            "engellemiş, router'a erişiminiz yok) kullanılan son çare yöntemdir. Taşınabilir "
-            "bir USB kit hedef cihazda çalıştırılır; kit kendiliğinden bir '.onion' adresi "
-            "üretir ve SADECE sizin anahtarınıza sahip bağlantıları kabul eder -- adresi "
-            "başka biri bilse bile bağlanamaz."
-        )
+        what = QLabel(t("tool_tor_what", self.lang))
         what.setWordWrap(True)
         what.setStyleSheet(f"color:{ui.TEXT_MAIN}; font-family:'{ui.FONT_UI}'; font-size:{ui.SIZE_HELPER}px;")
         layout.addWidget(what)
 
-        steps_heading = QLabel("Kullanım adımları:")
+        steps_heading = QLabel(t("tool_tor_steps_heading", self.lang))
         steps_heading.setStyleSheet(f"color:{ui.ACCENT_TEXT}; font-family:'{ui.FONT_UI}'; font-size:{ui.SIZE_HELPER}px; font-weight:600;")
         layout.addWidget(steps_heading)
 
-        steps = QLabel(
-            "1. Aşağıdaki kutudaki açık anahtarınızı \"Kopyala\" ile alın.\n"
-            "2. Bu anahtarı, taşınabilir kiti hedef cihaza götürecek kişiye ÖNCEDEN verin (kit "
-            "bu anahtarla hazırlanmış olmalı).\n"
-            "3. Kit hedef cihazda çalıştırılınca bir '.onion' adresi üretir; sahadaki kişi bunu "
-            "size KENDİ telefonuyla iletir (delil cihazının ağı/uygulamaları hiç kullanılmaz).\n"
-            "4. Aldığınız '.onion' adresini yukarıdaki Host alanına yazın (örn. abcxyz....onion).\n"
-            "5. Bu mod seçiliyken normal şekilde \"Bağlan ve Diskleri Listele\"ye basın -- "
-            "bağlantı Tor ağı üzerinden, anahtarınızla doğrulanarak kurulur."
-        )
+        steps = QLabel(t("tool_tor_steps", self.lang))
         steps.setWordWrap(True)
         steps.setStyleSheet(f"color:{ui.TEXT_MAIN}; font-family:'{ui.FONT_UI}'; font-size:{ui.SIZE_HELPER}px;")
         layout.addWidget(steps)
 
-        warn = QLabel(
-            "⚠ YAVAŞTIR: veri Tor ağındaki birden fazla farklı sunucu üzerinden dolaşarak gider "
-            "-- büyük bir disk imajı saatlerce sürebilir. Mümkünse önce Doğrudan/VPN'i deneyin, "
-            "bunu gerçekten son çare olarak kullanın."
-        )
+        warn = QLabel(t("tool_tor_warn", self.lang))
         warn.setWordWrap(True)
         warn.setStyleSheet(f"color:{ui.WARNING}; font-family:'{ui.FONT_UI}'; font-size:{ui.SIZE_HELPER}px; font-weight:600;")
         layout.addWidget(warn)
 
-        key_heading = QLabel("Operatör Açık Anahtarınız:")
+        key_heading = QLabel(t("tool_tor_key_heading", self.lang))
         key_heading.setStyleSheet(f"color:{ui.TEXT_MAIN}; font-family:'{ui.FONT_UI}'; font-size:{ui.SIZE_HELPER}px; font-weight:600;")
         layout.addWidget(key_heading)
 
@@ -1551,7 +1521,7 @@ class ForensicWidget(QWidget):
         self.entry_operator_pubkey = widgets.MonoInput()
         self.entry_operator_pubkey.setReadOnly(True)
         key_row.addWidget(self.entry_operator_pubkey)
-        copy_btn = widgets.SecondaryButton("Kopyala")
+        copy_btn = widgets.SecondaryButton(t("btn_copy", self.lang))
         copy_btn.clicked.connect(self._copy_operator_pubkey)
         key_row.addWidget(copy_btn)
         layout.addLayout(key_row)
@@ -1564,10 +1534,7 @@ class ForensicWidget(QWidget):
             f"color:{ui.ACCENT_TEXT}; font-family:'{ui.FONT_MONO}'; font-size:{ui.SIZE_HELPER}px; font-weight:600;"
         )
         layout.addWidget(self.lbl_operator_key_fingerprint)
-        hint = QLabel(
-            "Sahadaki kişi anahtarı yapıştırdıktan sonra kendi ekranında da bu kod "
-            "belirir -- başlatmadan önce telefonla karşılaştırın."
-        )
+        hint = QLabel(t("tool_tor_key_confirm_hint", self.lang))
         hint.setWordWrap(True)
         hint.setStyleSheet(f"color:{ui.TEXT_SECONDARY}; font-family:'{ui.FONT_UI}'; font-size:{ui.SIZE_HELPER}px;")
         layout.addWidget(hint)
@@ -1595,7 +1562,7 @@ class ForensicWidget(QWidget):
                 self._operator_private_key, self._operator_public_key = self._load_or_create_operator_key()
             self.entry_operator_pubkey.setText(self._operator_public_key or "")
             if key_fingerprint is not None and self._operator_public_key:
-                self.lbl_operator_key_fingerprint.setText(f"Kod: {key_fingerprint(self._operator_public_key)}")
+                self.lbl_operator_key_fingerprint.setText(t("tool_key_code_label", self.lang, code=key_fingerprint(self._operator_public_key)))
 
     def _load_or_create_operator_key(self):
         """AYNEN tasindi (gui_v2.py) -- keys/operator_tor_key.json'dan yukler/uretir."""
@@ -1626,9 +1593,11 @@ class ForensicWidget(QWidget):
         self.strict_host_key_value = not self.radio_hostkey_skip.isChecked()
         self.hk_warn.setVisible(not self.strict_host_key_value)
 
-    def _help_link(self, topic_key, label="Bu ne demek? (Bilgi Merkezi'nde oku)"):
+    def _help_link(self, topic_key, label=None):
         """Bilgi Merkezi'ndeki bir konuya goturen, mavi metin gorunumlu
         kucuk bir buton."""
+        if label is None:
+            label = t("btn_read_in_help_center", self.lang)
         btn = QPushButton(label)
         btn.setFlat(True)
         btn.setCursor(Qt.PointingHandCursor)
@@ -1653,7 +1622,7 @@ class ForensicWidget(QWidget):
 
         from PySide6.QtWidgets import QScrollArea
 
-        topic = get_topic(topic_key)
+        topic = get_topic(topic_key, self.lang)
         if topic is None:
             return
         dialog = QDialog(self)
@@ -1669,7 +1638,7 @@ class ForensicWidget(QWidget):
         scroll.setWidget(text)
         layout.addWidget(scroll)
 
-        close_btn = widgets.SecondaryButton("Kapat")
+        close_btn = widgets.SecondaryButton(t("btn_close", self.lang))
         close_btn.clicked.connect(dialog.accept)
         layout.addWidget(close_btn)
         dialog.exec()
@@ -1677,11 +1646,11 @@ class ForensicWidget(QWidget):
     # -- Kucuk UI durum degisimleri ------------------------------------------
     def _on_target_os_change(self, *_args):
         if self.radio_os_windows.isChecked():
-            self.lbl_disk_path.setText("Disk Numarası (örn. 0):")
-            self.lbl_remote_path.setText("Uzak Yol (örn. C:\\Users\\kullanici\\Belgeler):")
+            self.lbl_disk_path.setText(t("tool_disk_number_label", self.lang))
+            self.lbl_remote_path.setText(t("tool_remote_path_label_win", self.lang))
         else:
-            self.lbl_disk_path.setText("Disk (örn. /dev/sdb):")
-            self.lbl_remote_path.setText("Uzak Yol (örn. /home/user/belgeler):")
+            self.lbl_disk_path.setText(t("tool_disk_path_label", self.lang))
+            self.lbl_remote_path.setText(t("tool_remote_path_label", self.lang))
 
     def _on_mode_change(self, *_args):
         offline = self.radio_offline.isChecked()
@@ -1730,7 +1699,7 @@ class ForensicWidget(QWidget):
     def _clear_log(self):
         self.txt_log.clear()
         self.progress.set_determinate(0)
-        self.status_label.setText("Bekleniyor...")
+        self.status_label.setText(t("tool_status_waiting", self.lang))
 
     def _set_status(self, text):
         self.status_label.setText(text)
@@ -1746,17 +1715,17 @@ class ForensicWidget(QWidget):
 
     # -- Dosya sec dialoglari ------------------------------------------------
     def _browse_key(self):
-        path, _ = QFileDialog.getOpenFileName(self, "SSH Anahtarı Seç", "", "PEM (*.pem);;Tüm Dosyalar (*.*)")
+        path, _ = QFileDialog.getOpenFileName(self, t("tool_dialog_ssh_key_select", self.lang), "", t("tool_filter_pem", self.lang))
         if path:
             self.entry_key.setText(path)
 
     def _browse_out(self):
-        path, _ = QFileDialog.getSaveFileName(self, "İmaj Dosyası Kaydet", self.entry_out.text(), "Raw Image (*.raw);;Tüm Dosyalar (*.*)")
+        path, _ = QFileDialog.getSaveFileName(self, t("tool_dialog_save_image", self.lang), self.entry_out.text(), t("tool_filter_raw", self.lang))
         if path:
             self.entry_out.setText(path)
 
     def _browse_file_out(self):
-        path = QFileDialog.getExistingDirectory(self, "Çıktı Klasörü Seç")
+        path = QFileDialog.getExistingDirectory(self, t("tool_dialog_output_folder", self.lang))
         if path:
             self.entry_file_out.setText(path)
 
@@ -1769,11 +1738,11 @@ class ForensicWidget(QWidget):
         ile gezinmeyi saglar.
         """
         if self.ssh is None:
-            self._show_error("Önce bağlanın (\"Bağlan ve Diskleri Listele\").")
+            self._show_error(t("tool_err_connect_first_browse", self.lang))
             return
         target_os = "windows" if self.radio_os_windows.isChecked() else "linux"
         start_path = self.entry_remote_path.text().strip() or ("C:\\" if target_os == "windows" else "/")
-        dialog = RemoteBrowseDialog(self.ssh, target_os, start_path, parent=self)
+        dialog = RemoteBrowseDialog(self.ssh, target_os, start_path, lang=self.lang, parent=self)
         if dialog.exec() == QDialog.DialogCode.Accepted and dialog.selected_path:
             self.entry_remote_path.setText(dialog.selected_path)
 
@@ -1794,9 +1763,9 @@ class ForensicWidget(QWidget):
             result["value"] = True
             dialog.accept()
 
-        yes_btn = widgets.PrimaryButton("Evet")
+        yes_btn = widgets.PrimaryButton(t("btn_yes", self.lang))
         yes_btn.clicked.connect(_yes)
-        no_btn = widgets.SecondaryButton("Hayır")
+        no_btn = widgets.SecondaryButton(t("btn_no", self.lang))
         no_btn.clicked.connect(dialog.reject)
         btn_row.addWidget(yes_btn)
         btn_row.addWidget(no_btn)
@@ -1806,28 +1775,28 @@ class ForensicWidget(QWidget):
 
     def _show_error(self, msg):
         dialog = QDialog(self)
-        dialog.setWindowTitle("Hata")
+        dialog.setWindowTitle(t("dialog_title_error", self.lang))
         dialog.setStyleSheet(f"background-color:{ui.BG_SURFACE};")
         layout = QVBoxLayout(dialog)
         lbl = QLabel(msg)
         lbl.setWordWrap(True)
         lbl.setStyleSheet(f"color:{ui.ERROR}; font-family:'{ui.FONT_UI}'; padding: 8px;")
         layout.addWidget(lbl)
-        ok_btn = widgets.PrimaryButton("Tamam")
+        ok_btn = widgets.PrimaryButton(t("btn_ok", self.lang))
         ok_btn.clicked.connect(dialog.accept)
         layout.addWidget(ok_btn)
         dialog.exec()
 
     def _show_info(self, msg):
         dialog = QDialog(self)
-        dialog.setWindowTitle("Bilgi")
+        dialog.setWindowTitle(t("dialog_title_info", self.lang))
         dialog.setStyleSheet(f"background-color:{ui.BG_SURFACE};")
         layout = QVBoxLayout(dialog)
         lbl = QLabel(msg)
         lbl.setWordWrap(True)
         lbl.setStyleSheet(f"color:{ui.TEXT_MAIN}; font-family:'{ui.FONT_UI}'; padding: 8px;")
         layout.addWidget(lbl)
-        ok_btn = widgets.PrimaryButton("Tamam")
+        ok_btn = widgets.PrimaryButton(t("btn_ok", self.lang))
         ok_btn.clicked.connect(dialog.accept)
         layout.addWidget(ok_btn)
         dialog.exec()
@@ -1842,11 +1811,11 @@ class ForensicWidget(QWidget):
         key_path = self.entry_key.text().strip() or None
 
         if not host or not user:
-            self._show_error("Host ve kullanıcı adı zorunlu.")
+            self._show_error(t("tool_err_host_user_required", self.lang))
             return
 
         self.btn_connect.setEnabled(False)
-        self.btn_connect.setText("Bağlanıyor...")
+        self.btn_connect.setText(t("tool_btn_connecting", self.lang))
         self.conn_badge.set_status(*widgets.StatusBadge.PRESET_CONNECTING)
         self.connect_worker = ConnectWorker(
             host, port, user, password, key_path, self.conn_method_value,
@@ -1873,7 +1842,7 @@ class ForensicWidget(QWidget):
 
     def _on_connect_finished(self):
         self.btn_connect.setEnabled(True)
-        self.btn_connect.setText("Bağlan ve Diskleri Listele")
+        self.btn_connect.setText(t("tool_btn_connect", self.lang))
 
     def _on_connect_error(self, msg):
         self._show_error(msg)
@@ -1900,7 +1869,7 @@ class ForensicWidget(QWidget):
         self.disks_raw = disks_raw
         self._log("--- Mevcut Diskler ---", "info")
         self._log(disks_raw, "plain")
-        self._set_status("Bağlantı kuruldu, diskler listelendi.")
+        self._set_status(t("tool_status_connected_disks", self.lang))
 
     def _new_report_ctx(self):
         return {
@@ -1915,7 +1884,7 @@ class ForensicWidget(QWidget):
     # -- Imaj Alma ------------------------------------------------------
     def _start_acquisition(self):
         if self.ssh is None or not self.ssh.is_active():
-            self._show_error("Önce SSH bağlantısı kurun (Bağlan ve Diskleri Listele).")
+            self._show_error(t("tool_err_connect_first", self.lang))
             return
         if self.radio_acq_disk.isChecked():
             if self.radio_os_windows.isChecked():
@@ -1930,15 +1899,15 @@ class ForensicWidget(QWidget):
         out_path = self.entry_out.text().strip()
         mode = "offline" if self.radio_offline.isChecked() else "live"
         if not disk_str:
-            self._show_error("Hedef disk numarasını girin (örn. 0).")
+            self._show_error(t("tool_err_disk_number_required", self.lang))
             return
         try:
             disk_number = int(disk_str)
         except ValueError:
-            self._show_error("Disk numarası tam sayı olmalı (örn. 0, 1) -- \\\\.\\PhysicalDriveN'deki N.")
+            self._show_error(t("tool_err_disk_number_invalid", self.lang))
             return
         if not out_path:
-            self._show_error("İmaj çıktı yolu seçin.")
+            self._show_error(t("tool_err_output_path_required", self.lang))
             return
 
         compress = mode == "offline" and self.check_compress.isChecked()
@@ -1952,17 +1921,17 @@ class ForensicWidget(QWidget):
         mode = "offline" if self.radio_offline.isChecked() else "live"
         password = self.entry_pass.text().strip() or None
         if not disk:
-            self._show_error("Hedef disk yolu girin (örn. /dev/sdb).")
+            self._show_error(t("tool_err_disk_path_required", self.lang))
             return
         if not disk.startswith("/dev/"):
             disk = f"/dev/{disk}"
         if not out_path:
-            self._show_error("İmaj çıktı yolu seçin.")
+            self._show_error(t("tool_err_output_path_required", self.lang))
             return
 
         disk_name = disk.replace("/dev/", "")
         if getattr(self, "disks_raw", "") and disk_name not in self.disks_raw:
-            if not self._show_yesno_dialog("Disk listede yok", f"'{disk_name}' listelenen disklerde görünmüyor.\nYine de devam edilsin mi?"):
+            if not self._show_yesno_dialog(t("tool_disk_not_listed_title", self.lang), t("tool_disk_not_listed_msg", self.lang, disk=disk_name)):
                 return
 
         compress = mode == "offline" and self.check_compress.isChecked()
@@ -1975,10 +1944,10 @@ class ForensicWidget(QWidget):
         out_dir = self.entry_file_out.text().strip()
         password = self.entry_pass.text().strip() or None
         if not remote_path:
-            self._show_error("Uzak dosya/klasör yolu girin (örn. /home/user/belgeler).")
+            self._show_error(t("tool_err_remote_path_required", self.lang))
             return
         if not out_dir:
-            self._show_error("Çıktı klasörü seçin.")
+            self._show_error(t("tool_err_output_folder_required", self.lang))
             return
 
         ctx = self._new_report_ctx()
@@ -1991,7 +1960,7 @@ class ForensicWidget(QWidget):
     def _begin_acquisition(self, kind, ctx, header_line):
         self.btn_acquire.setEnabled(False)
         self._set_progress(0)
-        self._set_status("İmaj alma başlıyor...")
+        self._set_status(t("tool_status_acquisition_starting", self.lang))
         self._log(f"\n{'=' * 50}", "info")
         self._log(header_line, "info")
         self._log("=" * 50, "info")
@@ -2026,8 +1995,8 @@ class ForensicWidget(QWidget):
 
     def _on_ask_verify(self, image_path):
         ans = self._show_yesno_dialog(
-            "Doğrulama",
-            "İmaj alma tamamlandı.\nUzak diskin SHA-256 hash'ini biliyor musunuz?\n(Biliyorsanız doğrulama yapılacak)",
+            t("tool_ask_verify_title", self.lang),
+            t("tool_ask_verify_msg", self.lang),
         )
         if ans:
             # Bu, az once tamamlanan alma islemine ait dogrulama -- sonucu
@@ -2037,7 +2006,7 @@ class ForensicWidget(QWidget):
 
     # -- Imaj Dogrulama -----------------------------------------------------
     def _verify_image(self):
-        path, _ = QFileDialog.getOpenFileName(self, "İmaj Dosyası Seç", "", "Raw Image (*.raw);;Tüm Dosyalar (*.*)")
+        path, _ = QFileDialog.getOpenFileName(self, t("tool_dialog_select_image", self.lang), "", t("tool_filter_raw", self.lang))
         if not path:
             return
         # Elle secilen keyfi bir dosya -- az onceki alma islemine ait
@@ -2047,10 +2016,10 @@ class ForensicWidget(QWidget):
 
     def _verify_image_with_path(self, path, report=None, report_path=None):
         dialog = QDialog(self)
-        dialog.setWindowTitle("Hash Doğrulama")
+        dialog.setWindowTitle(t("tool_verify_dialog_title", self.lang))
         dialog.setStyleSheet(f"background-color:{ui.BG_SURFACE};")
         layout = QVBoxLayout(dialog)
-        layout.addWidget(QLabel("Beklenen SHA-256 (uzak diskin hash'i):"))
+        layout.addWidget(QLabel(t("tool_verify_expected_label", self.lang)))
         entry_hash = widgets.MonoInput()
         entry_hash.setFixedWidth(420)
         layout.addWidget(entry_hash)
@@ -2063,9 +2032,9 @@ class ForensicWidget(QWidget):
             dialog.accept()
 
         btn_row = QHBoxLayout()
-        ok_btn = widgets.PrimaryButton("Doğrula")
+        ok_btn = widgets.PrimaryButton(t("btn_verify", self.lang))
         ok_btn.clicked.connect(on_ok)
-        cancel_btn = widgets.SecondaryButton("İptal")
+        cancel_btn = widgets.SecondaryButton(t("btn_cancel", self.lang))
         cancel_btn.clicked.connect(dialog.reject)
         btn_row.addWidget(ok_btn)
         btn_row.addWidget(cancel_btn)
@@ -2088,17 +2057,17 @@ class ForensicWidget(QWidget):
         self._log("[BAŞARILI] Doğrulama OK!")
         self._log(f"  SHA-256 : {digest}", "plain")
         self._log(f"  Boyut   : {byte_count} bayt", "plain")
-        self._show_info("İmaj doğrulandı — kaynakla birebir aynı.")
+        self._show_info(t("tool_verify_ok_msg", self.lang))
 
     def _on_verify_mismatch(self, expected, actual):
         self._log("[HATA] Hash uyuşmazlığı!")
         self._log(f"  Beklenen: {expected}", "plain")
         self._log(f"  Gerçek  : {actual}", "plain")
-        self._show_error("Hash uyuşmazlığı — imaj bozulmuş olabilir.")
+        self._show_error(t("tool_verify_mismatch_msg", self.lang))
 
     def _on_verify_error(self, msg):
         self._log(f"[HATA] Doğrulama hatası: {msg}")
-        self._show_error(f"Doğrulama hatası: {msg}")
+        self._show_error(t("tool_verify_error_fmt", self.lang, msg=msg))
 
     # -- Rapor ozeti (ram_gui.py ile ayni desen) --------------------------
     def _show_report_summary(self, report, report_path):
@@ -2113,14 +2082,14 @@ class ForensicWidget(QWidget):
         html_path = os.path.splitext(report_path)[0] + ".html"
 
         dialog = QDialog(self)
-        dialog.setWindowTitle("İşlem Raporu")
+        dialog.setWindowTitle(t("tool_report_dialog_title", self.lang))
         dialog.resize(480, 380)
         dialog.setStyleSheet(f"background-color:{ui.BG_DARKEST};")
         layout = QVBoxLayout(dialog)
 
         d = report.to_dict()
         basarili = d["result"]["status"] == "success"
-        head = QLabel("✔ İşlem Tamamlandı" if basarili else f"İşlem Durumu: {d['result']['status']}")
+        head = QLabel(t("tool_report_done", self.lang) if basarili else t("tool_report_status_fmt", self.lang, status=d['result']['status']))
         head.setStyleSheet(f"color:{ui.SUCCESS if basarili else ui.WARNING}; font-family:'{ui.FONT_UI}'; font-size:15px; font-weight:600;")
         layout.addWidget(head)
 
@@ -2128,16 +2097,16 @@ class ForensicWidget(QWidget):
         md5_hash = d["integrity"]["md5_hash"] or ""
         sha1_hash = d["integrity"]["sha1_hash"] or ""
         satirlar = [
-            ("Vaka No", d["case"]["case_id"] or "—"),
-            ("İnceleyen", d["case"]["examiner"] or "—"),
-            ("Cihaz Sahibi / Yetkili Kişi", d["case"]["custodian"] or "—"),
-            ("Organizasyon", d["case"]["organization"] or "—"),
-            ("Hedef", d["acquisition"]["target_host"] or d["acquisition"]["source_identifier"] or "—"),
-            ("Bağlantı Yöntemi", d["acquisition"]["connection_method"] or "—"),
+            (t("field_case_id", self.lang), d["case"]["case_id"] or "—"),
+            (t("field_examiner", self.lang), d["case"]["examiner"] or "—"),
+            (t("field_custodian", self.lang), d["case"]["custodian"] or "—"),
+            (t("field_organization", self.lang), d["case"]["organization"] or "—"),
+            (t("label_target", self.lang), d["acquisition"]["target_host"] or d["acquisition"]["source_identifier"] or "—"),
+            (t("tool_conn_method_card", self.lang), d["acquisition"]["connection_method"] or "—"),
             ("SHA-256", (image_hash[:24] + "…") if image_hash else "—"),
             ("MD5", (md5_hash[:24] + "…") if md5_hash else "—"),
             ("SHA-1", (sha1_hash[:24] + "…") if sha1_hash else "—"),
-            ("Sonuç", d["result"]["status"]),
+            (t("label_result", self.lang), d["result"]["status"]),
         ]
         for etiket, deger in satirlar:
             row = QHBoxLayout()
@@ -2160,11 +2129,11 @@ class ForensicWidget(QWidget):
             except Exception as e:
                 self._log(f"[UYARI] Rapor açılamadı: {e}", "warn")
 
-        open_btn = widgets.PrimaryButton("Raporu Aç (HTML)")
+        open_btn = widgets.PrimaryButton(t("btn_open_report_html", self.lang))
         open_btn.clicked.connect(_open_html)
         btns.addWidget(open_btn)
         btns.addStretch()
-        close_btn = widgets.SecondaryButton("Kapat")
+        close_btn = widgets.SecondaryButton(t("btn_close", self.lang))
         close_btn.clicked.connect(dialog.close)
         btns.addWidget(close_btn)
         layout.addLayout(btns)
@@ -2185,7 +2154,7 @@ if __name__ == "__main__":
     app.setStyleSheet(ui.base_stylesheet())
 
     win = QMainWindow()
-    win.setWindowTitle("SSH ile Uzak İmaj Al")
+    win.setWindowTitle(t("tool_ssh_title", "tr"))
     win.resize(1000, 820)
     win.setCentralWidget(ForensicWidget())
     win.show()

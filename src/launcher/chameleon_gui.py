@@ -2472,6 +2472,7 @@ class ChameleonWindow(QMainWindow):
             initial_case_id=case.get("case_id", ""), initial_examiner=case.get("examiner", ""),
             initial_custodian=case.get("custodian", ""), initial_organization=case.get("organization", ""),
             initial_connection_method=connection_method, display_timezone=self.display_timezone,
+            lang=self.lang,
         )
         page_layout.addWidget(ssh_widget)
         self._active_tool_widget = page
@@ -2494,7 +2495,7 @@ class ChameleonWindow(QMainWindow):
             on_back=self._show_home, on_show_help=self._show_help_from_tool,
             initial_case_id=case.get("case_id", ""), initial_examiner=case.get("examiner", ""),
             initial_custodian=case.get("custodian", ""), initial_organization=case.get("organization", ""),
-            display_timezone=self.display_timezone,
+            display_timezone=self.display_timezone, lang=self.lang,
         )
         page_layout.addWidget(ram_widget)
         self._active_tool_widget = page

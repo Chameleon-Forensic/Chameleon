@@ -34,8 +34,12 @@ DRIVER_PATH = os.path.join(RAM_ENGINE_DIR, "driver", "RamImagerDriver.sys")
 _SHARED_DIR = os.path.join(RAM_ENGINE_DIR, "..", "..", "shared")
 if os.path.isdir(_SHARED_DIR):
     sys.path.insert(0, _SHARED_DIR)
+_I18N_DIR = os.path.join(_SHARED_DIR, "i18n")
+if os.path.isdir(_I18N_DIR):
+    sys.path.insert(0, _I18N_DIR)
 from ui_kit import theme_qt as ui, fonts, icons, widgets  # noqa: E402
 from help_content import get_topic  # noqa: E402
+from strings import t  # noqa: E402
 
 try:
     from forensic_report import ForensicReport
@@ -348,13 +352,14 @@ class RamWorker(QThread):
 
 class RamEngineWidget(QWidget):
     def __init__(self, on_back=None, on_show_help=None, initial_case_id="", initial_examiner="",
-                 initial_custodian="", initial_organization="", display_timezone=None, parent=None):
+                 initial_custodian="", initial_organization="", display_timezone=None, lang="tr", parent=None):
         super().__init__(parent)
         self.on_back = on_back
         # bkz. gui_v2.py'deki ForensicWidget.on_show_help -- ayni desen:
         # launcher icinden aciliyorsa Bilgi Merkezi sayfasina goturur,
         # standalone calistirmada None kalir (dialog fallback kullanilir).
         self.on_show_help = on_show_help
+        self.lang = lang or "tr"
         self._pid_map = {}
         self.worker = None
         # launcher'in chameleon_gui._widget_should_persist'i okuyor -- None
@@ -375,10 +380,10 @@ class RamEngineWidget(QWidget):
         header = QHBoxLayout()
         header.setContentsMargins(20, 14, 20, 14)
         if self.on_back:
-            back_btn = widgets.SecondaryButton("← Geri")
+            back_btn = widgets.SecondaryButton(t("btn_back", self.lang))
             back_btn.clicked.connect(self.on_back)
             header.addWidget(back_btn)
-        title = QLabel("RAM İmajı Al")
+        title = QLabel(t("tool_ram_title", self.lang))
         title.setStyleSheet(f"color:{ui.TEXT_MAIN}; font-family:'{ui.FONT_UI}'; font-size:{ui.SIZE_TITLE}px; font-weight:600;")
         header.addWidget(title)
         header.addStretch()
@@ -412,22 +417,22 @@ class RamEngineWidget(QWidget):
         # icin yine olusturuluyor, sadece ekranda GORUNMUYOR. Standalone
         # calistirmada (on_back yok, ayri bir on-ekran da yok) kart gorunur
         # kalir -- tek vaka bilgisi girisi orasi.
-        vaka = widgets.Card("Vaka Bilgileri")
-        vaka.body.addWidget(self._note("(İsteğe bağlı -- rapor üretmiyorsanız boş bırakabilirsiniz)"))
-        self.entry_case = self._labeled_input(vaka.body, "Vaka No", initial_case_id)
-        self.entry_examiner = self._labeled_input(vaka.body, "İnceleyen", initial_examiner)
-        self.entry_custodian = self._labeled_input(vaka.body, "Cihaz Sahibi / Yetkili Kişi", initial_custodian)
-        self.entry_organization = self._labeled_input(vaka.body, "Organizasyon", initial_organization)
+        vaka = widgets.Card(t("case_info_title", self.lang))
+        vaka.body.addWidget(self._note(t("case_info_note", self.lang)))
+        self.entry_case = self._labeled_input(vaka.body, t("field_case_id", self.lang), initial_case_id)
+        self.entry_examiner = self._labeled_input(vaka.body, t("field_examiner", self.lang), initial_examiner)
+        self.entry_custodian = self._labeled_input(vaka.body, t("field_custodian", self.lang), initial_custodian)
+        self.entry_organization = self._labeled_input(vaka.body, t("field_organization", self.lang), initial_organization)
         if self.on_back:
             vaka.hide()
         layout.addWidget(vaka)
 
         # === Mod secimi ===
-        mode_card = widgets.Card("Mod")
+        mode_card = widgets.Card(t("tool_mode_card", self.lang))
         mode_row = QHBoxLayout()
         self.mode_group = QButtonGroup(self)
-        self.radio_process = widgets.RadioButton("Process Dump (sürücü gerekmez, hemen çalışır)")
-        self.radio_full = widgets.RadioButton("Full RAM (Yönetici + sürücü gerekir)")
+        self.radio_process = widgets.RadioButton(t("tool_ram_process_radio", self.lang))
+        self.radio_full = widgets.RadioButton(t("tool_ram_full_radio", self.lang))
         self.radio_process.setChecked(True)
         for r in (self.radio_process, self.radio_full):
             self.mode_group.addButton(r)
@@ -438,9 +443,9 @@ class RamEngineWidget(QWidget):
         layout.addWidget(mode_card)
 
         # === Process modu alanlari ===
-        self.process_card = widgets.Card("Process Dump")
+        self.process_card = widgets.Card(t("tool_process_card", self.lang))
         proc_row = QHBoxLayout()
-        proc_row.addWidget(QLabel("Process:"))
+        proc_row.addWidget(QLabel(t("tool_process_label", self.lang)))
         self.process_combo = QComboBox()
         self.process_combo.setMinimumWidth(340)
         self.process_combo.setStyleSheet(f"""
@@ -450,7 +455,7 @@ class RamEngineWidget(QWidget):
             }}
         """)
         proc_row.addWidget(self.process_combo)
-        refresh_btn = widgets.SecondaryButton("Yenile")
+        refresh_btn = widgets.SecondaryButton(t("btn_refresh", self.lang))
         refresh_btn.clicked.connect(self._refresh_processes)
         proc_row.addWidget(refresh_btn)
         proc_row.addStretch()
@@ -458,11 +463,8 @@ class RamEngineWidget(QWidget):
         layout.addWidget(self.process_card)
 
         # === Full mod alanlari ===
-        self.full_card = widgets.Card("Full RAM")
-        warn = QLabel(
-            "Yönetici olarak çalıştırılmalı; imzasız sürücü için Secure Boot kapatma + "
-            "test-signing + yeniden başlatma gerekir (bkz. engines/ram_engine/INSTALL.txt)."
-        )
+        self.full_card = widgets.Card(t("tool_full_card", self.lang))
+        warn = QLabel(t("tool_full_warn", self.lang))
         warn.setWordWrap(True)
         warn.setStyleSheet(f"color:{ui.ERROR}; font-family:'{ui.FONT_UI}'; font-size:{ui.SIZE_HELPER}px;")
         self.full_card.body.addWidget(warn)
@@ -471,14 +473,14 @@ class RamEngineWidget(QWidget):
         self.full_card.hide()
 
         # === Cikti ===
-        out_card = widgets.Card("Çıktı")
+        out_card = widgets.Card(t("tool_output_card", self.lang))
         out_row = QHBoxLayout()
-        out_row.addWidget(QLabel("Dosya:"))
+        out_row.addWidget(QLabel(t("tool_file_label", self.lang)))
         self.entry_out = widgets.MonoInput()
         default_out = os.path.join(os.environ.get("TEMP", "."), "ram_dump.dmp")
         self.entry_out.setText(default_out)
         out_row.addWidget(self.entry_out, stretch=1)
-        browse_btn = widgets.SecondaryButton("Gözat")
+        browse_btn = widgets.SecondaryButton(t("btn_browse", self.lang))
         browse_btn.clicked.connect(self._browse_out)
         out_row.addWidget(browse_btn)
         out_card.body.addLayout(out_row)
@@ -486,10 +488,10 @@ class RamEngineWidget(QWidget):
 
         # === Baslat + durum + ilerleme ===
         start_row = QHBoxLayout()
-        self.btn_start = widgets.PrimaryButton("Başlat")
+        self.btn_start = widgets.PrimaryButton(t("btn_start", self.lang))
         self.btn_start.clicked.connect(self._start)
         start_row.addWidget(self.btn_start)
-        self.status_label = QLabel("Hazır")
+        self.status_label = QLabel(t("tool_ready_status", self.lang))
         self.status_label.setStyleSheet(f"color:{ui.TEXT_SECONDARY}; font-family:'{ui.FONT_UI}'; font-size:{ui.SIZE_HELPER}px;")
         start_row.addWidget(self.status_label)
         start_row.addStretch()
@@ -500,8 +502,8 @@ class RamEngineWidget(QWidget):
         layout.addWidget(self.progress)
 
         # === Gunluk ===
-        log_card = widgets.Card("Günlük")
-        log_card.body.addWidget(self._help_link("chain_of_custody", "Delil zinciri nedir?"))
+        log_card = widgets.Card(t("tool_ram_log_card", self.lang))
+        log_card.body.addWidget(self._help_link("chain_of_custody", t("tool_help_link_coc", self.lang)))
         self.txt_log = QPlainTextEdit()
         self.txt_log.setReadOnly(True)
         self.txt_log.setMinimumHeight(200)
@@ -522,11 +524,13 @@ class RamEngineWidget(QWidget):
         lbl.setStyleSheet(f"color:{ui.TEXT_SECONDARY}; font-family:'{ui.FONT_UI}'; font-size:{ui.SIZE_HELPER}px; font-style: italic;")
         return lbl
 
-    def _help_link(self, topic_key, label="Bu ne demek? (Bilgi Merkezi'nde oku)"):
+    def _help_link(self, topic_key, label=None):
         """Bilgi Merkezi'ndeki bir konuya goturen, mavi metin gorunumlu
         kucuk bir buton -- bkz. gui_v2.py'deki ForensicWidget._help_link
         (ayni desen, iki dosya birbirinden bagimsiz calisabildigi icin
         kod tekrarlanir)."""
+        if label is None:
+            label = t("btn_read_in_help_center", self.lang)
         btn = QPushButton(label)
         btn.setFlat(True)
         btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -548,7 +552,7 @@ class RamEngineWidget(QWidget):
 
         from PySide6.QtWidgets import QScrollArea
 
-        topic = get_topic(topic_key)
+        topic = get_topic(topic_key, self.lang)
         if topic is None:
             return
         dialog = QDialog(self)
@@ -564,7 +568,7 @@ class RamEngineWidget(QWidget):
         scroll.setWidget(text)
         layout.addWidget(scroll)
 
-        close_btn = widgets.SecondaryButton("Kapat")
+        close_btn = widgets.SecondaryButton(t("btn_close", self.lang))
         close_btn.clicked.connect(dialog.accept)
         layout.addWidget(close_btn)
         dialog.exec()
@@ -613,7 +617,8 @@ class RamEngineWidget(QWidget):
     def _browse_out(self):
         ext = ".dmp" if self.radio_process.isChecked() else ".img"
         path, _ = QFileDialog.getSaveFileName(
-            self, "Çıktı Dosyası Seç", self.entry_out.text(), f"{ext[1:].upper()} dosyası (*{ext});;Tüm Dosyalar (*.*)",
+            self, t("tool_dialog_select_output_file", self.lang), self.entry_out.text(),
+            f"{t('tool_file_type_fmt', self.lang, ext=ext[1:].upper())} (*{ext});;{t('tool_filter_all_files', self.lang)}",
         )
         if path:
             self.entry_out.setText(path)
@@ -621,12 +626,12 @@ class RamEngineWidget(QWidget):
     # -- Calistirma --------------------------------------------------------
     def _start(self):
         if not os.path.isfile(CLI_PATH):
-            self._set_status(f"RamImagerCLI.exe bulunamadı: {CLI_PATH}", ui.ERROR)
+            self._set_status(t("tool_cli_not_found", self.lang, path=CLI_PATH), ui.ERROR)
             return
 
         out_path = self.entry_out.text().strip()
         if not out_path:
-            self._set_status("Çıktı dosyası seçin.", ui.ERROR)
+            self._set_status(t("tool_select_output_file", self.lang), ui.ERROR)
             return
 
         case = self.entry_case.text().strip()
@@ -635,7 +640,7 @@ class RamEngineWidget(QWidget):
         organization = self.entry_organization.text().strip()
 
         self.btn_start.setEnabled(False)
-        self._set_status("Çalışıyor...")
+        self._set_status(t("tool_running_status", self.lang))
         self.progress.show()
         self.progress.set_indeterminate()
 
@@ -643,7 +648,7 @@ class RamEngineWidget(QWidget):
             secim = self.process_combo.currentText()
             pid = self._pid_map.get(secim)
             if not pid:
-                self._set_status("Bir process seçin.", ui.ERROR)
+                self._set_status(t("tool_select_process", self.lang), ui.ERROR)
                 self.btn_start.setEnabled(True)
                 self.progress.hide()
                 return
@@ -685,14 +690,14 @@ class RamEngineWidget(QWidget):
         html_path = os.path.splitext(report_path)[0] + ".html"
 
         dialog = QDialog(self)
-        dialog.setWindowTitle("İşlem Raporu")
+        dialog.setWindowTitle(t("tool_report_dialog_title", self.lang))
         dialog.resize(480, 340)
         dialog.setStyleSheet(f"background-color:{ui.BG_DARKEST};")
         layout = QVBoxLayout(dialog)
 
         d = report.to_dict()
         basarili = d["result"]["status"] == "success"
-        head = QLabel("✔ İşlem Tamamlandı" if basarili else f"İşlem Durumu: {d['result']['status']}")
+        head = QLabel(t("tool_report_done", self.lang) if basarili else t("tool_report_status_fmt", self.lang, status=d['result']['status']))
         head.setStyleSheet(
             f"color:{ui.SUCCESS if basarili else ui.ERROR}; font-family:'{ui.FONT_UI}'; "
             f"font-size:15px; font-weight:600;"
@@ -703,15 +708,15 @@ class RamEngineWidget(QWidget):
         md5_hash = d["integrity"]["md5_hash"] or ""
         sha1_hash = d["integrity"]["sha1_hash"] or ""
         satirlar = [
-            ("Vaka No", d["case"]["case_id"] or "—"),
-            ("İnceleyen", d["case"]["examiner"] or "—"),
-            ("Cihaz Sahibi / Yetkili Kişi", d["case"]["custodian"] or "—"),
-            ("Organizasyon", d["case"]["organization"] or "—"),
-            ("Kaynak", d["acquisition"]["source_identifier"] or "—"),
+            (t("field_case_id", self.lang), d["case"]["case_id"] or "—"),
+            (t("field_examiner", self.lang), d["case"]["examiner"] or "—"),
+            (t("field_custodian", self.lang), d["case"]["custodian"] or "—"),
+            (t("field_organization", self.lang), d["case"]["organization"] or "—"),
+            (t("label_source", self.lang), d["acquisition"]["source_identifier"] or "—"),
             ("SHA-256", (image_hash[:24] + "…") if image_hash else "—"),
             ("MD5", (md5_hash[:24] + "…") if md5_hash else "—"),
             ("SHA-1", (sha1_hash[:24] + "…") if sha1_hash else "—"),
-            ("Sonuç", d["result"]["status"]),
+            (t("label_result", self.lang), d["result"]["status"]),
         ]
         for etiket, deger in satirlar:
             row = QHBoxLayout()
@@ -734,11 +739,11 @@ class RamEngineWidget(QWidget):
             except Exception as e:
                 self._log(f"[UYARI] Rapor açılamadı: {e}")
 
-        open_btn = widgets.PrimaryButton("Raporu Aç (HTML)")
+        open_btn = widgets.PrimaryButton(t("btn_open_report_html", self.lang))
         open_btn.clicked.connect(_open_html)
         btns.addWidget(open_btn)
         btns.addStretch()
-        close_btn = widgets.SecondaryButton("Kapat")
+        close_btn = widgets.SecondaryButton(t("btn_close", self.lang))
         close_btn.clicked.connect(dialog.close)
         btns.addWidget(close_btn)
         layout.addLayout(btns)
@@ -754,7 +759,7 @@ if __name__ == "__main__":
     app.setStyleSheet(ui.base_stylesheet())
 
     win = QMainWindow()
-    win.setWindowTitle("RAM İmajı Al")
+    win.setWindowTitle(t("tool_ram_title", "tr"))
     win.resize(820, 720)
     win.setCentralWidget(RamEngineWidget())
     win.show()
