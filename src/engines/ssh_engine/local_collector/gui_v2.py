@@ -1347,7 +1347,10 @@ class ForensicWidget(QWidget):
         disk_row3 = QHBoxLayout()
         disk_row3.addWidget(QLabel(t("tool_block_size_label", self.lang)))
         self.combo_block_size = QComboBox()
-        self.combo_block_size.addItems(["4 MB", "16 MB", "32 MB", "64 MB"])
+        self.combo_block_size.addItems([
+            t("tool_block_size_4mb", self.lang), t("tool_block_size_16mb", self.lang),
+            t("tool_block_size_32mb", self.lang), t("tool_block_size_64mb", self.lang),
+        ])
         self.combo_block_size.setStyleSheet(f"""
             QComboBox {{ background-color:{ui.BG_LAYER2}; color:{ui.TEXT_MAIN};
                 border:1px solid {ui.BORDER}; border-radius:{ui.RADIUS}px; padding:4px 8px; }}

@@ -276,6 +276,10 @@ STRINGS = {
         "tool_verify_error_fmt": "Doğrulama hatası: {msg}",
         "tool_file_type_fmt": "{ext} dosyası",
         "tool_filter_all_files": "Tüm Dosyalar (*.*)",
+        "tool_block_size_4mb": "4 MB — yavaş/kararsız bağlantılar için",
+        "tool_block_size_16mb": "16 MB — orta hızlı bağlantılar için",
+        "tool_block_size_32mb": "32 MB — hızlı bağlantılar için",
+        "tool_block_size_64mb": "64 MB — çok hızlı/yerel ağ için",
 
     },
     "en": {
@@ -523,6 +527,10 @@ STRINGS = {
         "tool_verify_error_fmt": "Verification error: {msg}",
         "tool_file_type_fmt": "{ext} file",
         "tool_filter_all_files": "All Files (*.*)",
+        "tool_block_size_4mb": "4 MB — for slow/unstable connections",
+        "tool_block_size_16mb": "16 MB — for medium-speed connections",
+        "tool_block_size_32mb": "32 MB — for fast connections",
+        "tool_block_size_64mb": "64 MB — for very fast/local network",
 
     },
     "es": {
@@ -771,6 +779,10 @@ STRINGS = {
         "tool_verify_error_fmt": "Error de verificación: {msg}",
         "tool_file_type_fmt": "Archivo {ext}",
         "tool_filter_all_files": "Todos los Archivos (*.*)",
+        "tool_block_size_4mb": "4 MB — para conexiones lentas/inestables",
+        "tool_block_size_16mb": "16 MB — para conexiones de velocidad media",
+        "tool_block_size_32mb": "32 MB — para conexiones rápidas",
+        "tool_block_size_64mb": "64 MB — para redes muy rápidas/locales",
 
     },
     "de": {
@@ -1020,6 +1032,10 @@ STRINGS = {
         "tool_verify_error_fmt": "Verifizierungsfehler: {msg}",
         "tool_file_type_fmt": "{ext}-Datei",
         "tool_filter_all_files": "Alle Dateien (*.*)",
+        "tool_block_size_4mb": "4 MB — für langsame/instabile Verbindungen",
+        "tool_block_size_16mb": "16 MB — für mittelschnelle Verbindungen",
+        "tool_block_size_32mb": "32 MB — für schnelle Verbindungen",
+        "tool_block_size_64mb": "64 MB — für sehr schnelle/lokale Netzwerke",
 
     },
     "pt": {
@@ -1268,6 +1284,10 @@ STRINGS = {
         "tool_verify_error_fmt": "Erro de verificação: {msg}",
         "tool_file_type_fmt": "Arquivo {ext}",
         "tool_filter_all_files": "Todos os Arquivos (*.*)",
+        "tool_block_size_4mb": "4 MB — para conexões lentas/instáveis",
+        "tool_block_size_16mb": "16 MB — para conexões de velocidade média",
+        "tool_block_size_32mb": "32 MB — para conexões rápidas",
+        "tool_block_size_64mb": "64 MB — para redes muito rápidas/locais",
 
     },
     "fr": {
@@ -1516,6 +1536,10 @@ STRINGS = {
         "tool_verify_error_fmt": "Erreur de vérification : {msg}",
         "tool_file_type_fmt": "Fichier {ext}",
         "tool_filter_all_files": "Tous les Fichiers (*.*)",
+        "tool_block_size_4mb": "4 Mo — pour connexions lentes/instables",
+        "tool_block_size_16mb": "16 Mo — pour connexions de vitesse moyenne",
+        "tool_block_size_32mb": "32 Mo — pour connexions rapides",
+        "tool_block_size_64mb": "64 Mo — pour réseaux très rapides/locaux",
 
     },
 }
