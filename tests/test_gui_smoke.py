@@ -119,3 +119,63 @@ def test_apply_lang_updates_sidebar_labels(window, qapp):
     labels = {btn.text().strip() for btn in window.findChildren(chameleon_gui.SidebarButton)}
     assert "Inicio" in labels
     assert "Configuración" in labels
+
+
+def _visible_tool_widget_class_names(window):
+    """Su an stack_layout'un GERCEKTEN GOSTERDIGI sayfada bulunan
+    ForensicWidget/RamEngineWidget SINIF isimlerini dondurur -- "hangi
+    ekrandayiz" sorusunu, ekran BASLIGINA degil, GERCEK araç widget'inin
+    varligina gore cevaplamak icin (baslik metni dile gore degisiyor,
+    sinif adi degismiyor).
+
+    window.findChildren(QWidget) KULLANILAMAZ: hide()'lanmis (persist
+    edilip saklanan) bir araç widget'i, stack_layout'tan cikarilmis olsa
+    bile Qt'nin parent-child agacinda window'un COCUGU olarak KALMAYA
+    devam eder, findChildren onu da bulurdu. isVisible() de guvenilir
+    degil -- test'te window.show() hic cagrilmadigi icin (headless/
+    offscreen) TUM widget'lar isVisible()==False doner, ust pencere hic
+    gosterilmedigi icin. Bu yuzden dogrudan stack_layout'un O ANKI TEK
+    ogesini (bkz. _clear_content -- her zaman tam 1 oge birakir) kontrol
+    ediyoruz."""
+    from PySide6.QtWidgets import QWidget
+    found = set()
+    for i in range(window.stack_layout.count()):
+        current = window.stack_layout.itemAt(i).widget()
+        if current is None:
+            continue
+        for w in [current] + current.findChildren(QWidget):
+            if type(w).__name__ in ("ForensicWidget", "RamEngineWidget"):
+                found.add(type(w).__name__)
+    return found
+
+
+def test_switching_ssh_method_does_not_get_stuck_on_previous_method(window, qapp):
+    """Kullanici bildirdi: VPN ekranindayken (henuz baglanmadan) Ana
+    Sayfa'ya donup Tor'a tiklaninca, Tor tanitim sayfasi yerine hala eski
+    VPN arac ekrani gosteriliyordu -- _resume_active_tool'un "ssh" kind'ini
+    Dogrudan/VPN/Tor arasinda AYIRT ETMEMESI yuzunden (bkz. chameleon_gui.py
+    _resume_active_tool docstring'i). Bu, o gercek senaryoyu birebir tekrar
+    eder."""
+    window._open_ssh_engine("vpn", {})
+    qapp.processEvents()
+    assert _visible_tool_widget_class_names(window) == {"ForensicWidget"}
+
+    window._show_home()
+    qapp.processEvents()
+    assert _visible_tool_widget_class_names(window) == set(), "Ana Sayfa'da arac ekrani gorunur kalmamali"
+
+    window._show_tor_detail()
+    qapp.processEvents()
+    assert _visible_tool_widget_class_names(window) == set(), (
+        "Tor'a tiklaninca eski VPN arac ekrani DEGIL, Tor tanitim sayfasi gorunmeli"
+    )
+    tor_title = chameleon_gui.METHOD_INFO["tor"][window.lang]["title"]
+    titles = [lbl.text() for lbl in window.findChildren(chameleon_gui.QLabel)]
+    assert tor_title in titles
+
+    # Ayni yontem (VPN) tekrar secilirse hala DOGRU sekilde resume etmeli
+    # -- bu duzeltme resume'u tamamen KAPATMADI, sadece yontem eslesmesini
+    # ekledi.
+    window._show_vpn_detail()
+    qapp.processEvents()
+    assert _visible_tool_widget_class_names(window) == {"ForensicWidget"}

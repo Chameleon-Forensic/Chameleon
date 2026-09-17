@@ -991,6 +991,7 @@ class ChameleonWindow(QMainWindow):
         # Ayni anda SADECE TEK bir aktif arac ekrani takip edilir.
         self._active_tool_widget = None
         self._active_tool_kind = None  # "ssh" | "ram"
+        self._active_tool_method = None  # "direct" | "vpn" | "tor" | None (sadece "ssh" icin anlamli)
         # _show_case_info sayfasi her acilista SIFIRDAN (bos alanlarla)
         # kuruluyordu -- kullanici bir yontemi secip vaka bilgilerini
         # doldurduktan sonra "Geri" ile cikip tekrar girerse hepsi
@@ -1571,12 +1572,22 @@ class ChameleonWindow(QMainWindow):
         self.stack_layout.addWidget(page)
         return page
 
-    def _resume_active_tool(self, kind):
+    def _resume_active_tool(self, kind, method=None):
         """Aktif ekran korunmaya deger mi (bkz. _widget_should_persist) --
         oyleyse onu (SIFIRDAN tanitim sayfasi yerine) stack'e geri ekleyip
         True doner. Yoksa/baska turdeyse/isi bitmisse False doner -- cagiran
-        taraf normal akisina (tanitim sayfasi) devam eder."""
+        taraf normal akisina (tanitim sayfasi) devam eder.
+
+        method verilirse (Dogrudan/VPN/Tor -- ucu de "ssh" kind'ini
+        paylasiyor) SADECE aktif ekran AYNI yontemle acildiysa resume
+        edilir -- yoksa VPN ekranindayken Tor'a tiklamak da eski VPN
+        ekranini geri getiriyordu (kullanici bildirdi): "hangi sekmeye
+        bassam SSH ekraninda kaliyorum". Eslesmeyen durumda _active_tool_*
+        SIFIRLANMAZ -- o yontem daha sonra tekrar secilirse hala resume
+        edilebilsin diye."""
         if self._active_tool_kind != kind or self._active_tool_widget is None:
+            return False
+        if method is not None and self._active_tool_method != method:
             return False
         if not self._widget_should_persist(self._active_tool_widget):
             self._active_tool_widget = None
@@ -1592,6 +1603,20 @@ class ChameleonWindow(QMainWindow):
         self.stack_layout.addWidget(self._active_tool_widget)
         self._active_tool_widget.show()
         return True
+
+    def _discard_stale_active_tool(self, new_page):
+        """Yontem/arac degisince (orn. VPN ekranindayken Tor'a gecilip
+        gercekten baglanildiginda) eski _active_tool_widget artik STACK'TE
+        DEGIL (daha once bir _clear_content() sirasinda gizlenip
+        saklanmisti, bkz. _widget_should_persist) -- o yuzden normal
+        _clear_content() dongusu onu hic gormez ve asagida yeni sayfayla
+        SESSIZCE UZERINE YAZILIRDI (deleteLater() hic cagrilmadan, kalici
+        bir Qt nesnesi sizintisi). Yeni bir arac acilmadan hemen once
+        cagrilip bunu onluyor."""
+        old = self._active_tool_widget
+        if old is not None and old is not new_page:
+            old.hide()
+            old.deleteLater()
 
     def _scrollable(self, page):
         scroll = QScrollArea()
@@ -1781,17 +1806,17 @@ class ChameleonWindow(QMainWindow):
         return card
 
     def _show_direct_detail(self):
-        if self._resume_active_tool("ssh"):
+        if self._resume_active_tool("ssh", "direct"):
             return
         self._show_method_detail("direct", lambda: self._show_case_info(lambda case: self._open_ssh_engine("direct", case)))
 
     def _show_vpn_detail(self):
-        if self._resume_active_tool("ssh"):
+        if self._resume_active_tool("ssh", "vpn"):
             return
         self._show_method_detail("vpn", lambda: self._show_case_info(lambda case: self._open_ssh_engine("vpn", case)))
 
     def _show_tor_detail(self):
-        if self._resume_active_tool("ssh"):
+        if self._resume_active_tool("ssh", "tor"):
             return
         self._show_method_detail("tor", lambda: self._show_case_info(lambda case: self._open_ssh_engine("tor", case)))
 
@@ -2475,8 +2500,10 @@ class ChameleonWindow(QMainWindow):
             lang=self.lang,
         )
         page_layout.addWidget(ssh_widget)
+        self._discard_stale_active_tool(page)
         self._active_tool_widget = page
         self._active_tool_kind = "ssh"
+        self._active_tool_method = connection_method
 
     def _open_ram_engine(self, case):
         """RAM motoru Qt'ye tasindi (plan adim 3) -- gercek ekran gomuluyor."""
@@ -2498,8 +2525,10 @@ class ChameleonWindow(QMainWindow):
             display_timezone=self.display_timezone, lang=self.lang,
         )
         page_layout.addWidget(ram_widget)
+        self._discard_stale_active_tool(page)
         self._active_tool_widget = page
         self._active_tool_kind = "ram"
+        self._active_tool_method = None
 
     def _show_pending_migration_notice(self, method_name):
         page = self._clear_content()
