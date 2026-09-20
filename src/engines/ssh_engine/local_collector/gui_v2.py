@@ -117,10 +117,11 @@ try:
         delete_manifest,
         get_disk_description,
     )
-    from file_acquirer import acquire_remote_tree, list_remote_directory
+    from file_acquirer import acquire_remote_tree, acquire_logical_image, list_remote_directory
     from windows_acquirer import (
         acquire_disk_image_windows,
         acquire_remote_tree_windows,
+        acquire_logical_image_windows,
         list_remote_directory_windows,
         get_disk_description_windows,
     )
@@ -833,10 +834,16 @@ class AcquisitionWorker(QThread):
     def _run_file(self):
         c = self.ctx
         remote_path, out_dir, password, target_os = c["remote_path"], c["out_dir"], c["password"], c["target_os"]
+        # Mantiksal imaj ayni kolu kullanir; sadece motor, rapor yontemi ve
+        # devam (resume) manifest turu degisir.
+        logical = c.get("logical", False)
         report = self._new_report(
-            engine="ssh_engine", method="file", target_os=target_os,
+            engine="ssh_engine", method="logical" if logical else "file", target_os=target_os,
             target_host=c["host"], source_identifier=remote_path,
-            source_description="Dosya/klasor modu -- write-blocker uygulanmaz",
+            source_description=(
+                "Mantiksal imaj -- kok yoldaki (tek hacim) okunabilen tum dosyalar; write-blocker uygulanmaz"
+                if logical else "Dosya/klasor modu -- write-blocker uygulanmaz"
+            ),
         )
         try:
             def ilerleme(done, total):
@@ -850,7 +857,9 @@ class AcquisitionWorker(QThread):
             # teklif ediyor.
             tree_manifest_path = None
             tree_resume_state = None
-            mevcut_tree = find_incomplete_tree_manifest(remote_path, host=c["host"])
+            mevcut_tree = find_incomplete_tree_manifest(
+                remote_path, host=c["host"], mode="logical" if logical else "file",
+            )
             if mevcut_tree:
                 tree_manifest_path, tree_resume_state = mevcut_tree
                 completed = len(tree_resume_state.get("acquired_files", []))
@@ -866,12 +875,14 @@ class AcquisitionWorker(QThread):
                     tree_resume_state = None
 
             if target_os == "windows":
-                manifest = acquire_remote_tree_windows(
+                alici = acquire_logical_image_windows if logical else acquire_remote_tree_windows
+                manifest = alici(
                     self.ssh, remote_path, out_dir, progress_callback=ilerleme,
                     manifest_path=tree_manifest_path, resume_state=tree_resume_state, host=c["host"],
                 )
             else:
-                manifest = acquire_remote_tree(
+                alici = acquire_logical_image if logical else acquire_remote_tree
+                manifest = alici(
                     self.ssh, remote_path, out_dir, password=password, progress_callback=ilerleme,
                     manifest_path=tree_manifest_path, resume_state=tree_resume_state, host=c["host"],
                 )
@@ -887,10 +898,22 @@ class AcquisitionWorker(QThread):
             basarili = len(manifest["acquired"])
             basarisiz = len(manifest["failed"])
             self.log.emit(f"[BAŞARILI] {basarili}/{manifest['total_files']} dosya alındı ve doğrulandı.", None)
+            # Mantiksal imajda her basarisiz dosya icin sebep (izin yok/kilitli...)
+            # da var; klasor modunda bos kalir.
+            sebepler = manifest.get("failed_reasons", {})
+            basarisiz_satirlari = [
+                f"{yol} — {sebepler[yol]}" if sebepler.get(yol) else yol
+                for yol in manifest["failed"]
+            ]
             if basarisiz:
                 self.log.emit(f"[UYARI] {basarisiz} dosya alınamadı:", None)
-                for yol in manifest["failed"]:
-                    self.log.emit(f"  - {yol}", "plain")
+                for satir in basarisiz_satirlari:
+                    self.log.emit(f"  - {satir}", "plain")
+            if manifest.get("excluded"):
+                self.log.emit(
+                    f"[BİLGİ] {len(manifest['excluded'])} öğe bilerek alınmadı "
+                    "(kilitli/sürekli değişen sistem öğeleri) — tam liste manifest'te.", "info",
+                )
             self.log.emit(f"[+] Manifest: {os.path.join(out_dir, 'manifest_files.json')}", "info")
             self.status.emit("Dosya/klasör alma tamamlandı.")
             self.progress.emit(100)
@@ -903,7 +926,7 @@ class AcquisitionWorker(QThread):
                 report.finish(
                     status="success" if not manifest["failed"] else "partial",
                     output_path=out_dir, total_bytes=toplam_bayt,
-                    chunk_count=manifest["total_files"], failed_items=manifest["failed"],
+                    chunk_count=manifest["total_files"], failed_items=basarisiz_satirlari,
                 )
                 rapor_yolu = self._save_report(report, out_dir)
                 self.report_ready.emit(report, rapor_yolu)
@@ -1308,8 +1331,9 @@ class ForensicWidget(QWidget):
         self.acq_group = QButtonGroup(self)
         self.radio_acq_disk = widgets.RadioButton(t("tool_acq_full_disk", self.lang))
         self.radio_acq_file = widgets.RadioButton(t("tool_acq_file_folder", self.lang))
+        self.radio_acq_logical = widgets.RadioButton(t("tool_acq_logical", self.lang))
         self.radio_acq_disk.setChecked(True)
-        for r in (self.radio_acq_disk, self.radio_acq_file):
+        for r in (self.radio_acq_disk, self.radio_acq_file, self.radio_acq_logical):
             self.acq_group.addButton(r)
             acq_row.addWidget(r)
             r.toggled.connect(self._on_acq_type_change)
@@ -1422,6 +1446,35 @@ class ForensicWidget(QWidget):
         self.file_card.body.addWidget(file_warn)
         body.addWidget(self.file_card)
         self.file_card.hide()
+
+        # === Mantiksal Imaj === (bkz. docs/roadmap.md madde 0.5) Klasor
+        # modundan farki: kok yol (bir disk bolumu) icindeki OKUNABILEN her
+        # dosyayi alir, alinamayanlari NEDENIYLE raporlar.
+        self.logical_card = widgets.Card(t("tool_logical_card", self.lang))
+        logical_row1 = QHBoxLayout()
+        self.lbl_logical_root = QLabel(t("tool_logical_root_label", self.lang))
+        logical_row1.addWidget(self.lbl_logical_root)
+        self.entry_logical_root = widgets.MonoInput()
+        self.entry_logical_root.setText("/")
+        logical_row1.addWidget(self.entry_logical_root, stretch=1)
+        self.logical_card.body.addLayout(logical_row1)
+
+        logical_row2 = QHBoxLayout()
+        logical_row2.addWidget(QLabel(t("tool_output_folder_label", self.lang)))
+        self.entry_logical_out = widgets.MonoInput()
+        self.entry_logical_out.setText(os.path.join(_PERSISTENT_ROOT, "images", "mantiksal"))
+        logical_row2.addWidget(self.entry_logical_out, stretch=1)
+        browse_logical_out_btn = widgets.SecondaryButton(t("btn_browse", self.lang))
+        browse_logical_out_btn.clicked.connect(self._browse_logical_out)
+        logical_row2.addWidget(browse_logical_out_btn)
+        self.logical_card.body.addLayout(logical_row2)
+
+        logical_note = QLabel(t("tool_logical_note", self.lang))
+        logical_note.setWordWrap(True)
+        logical_note.setStyleSheet(f"color:{ui.WARNING}; font-family:'{ui.FONT_UI}'; font-size:{ui.SIZE_HELPER}px;")
+        self.logical_card.body.addWidget(logical_note)
+        body.addWidget(self.logical_card)
+        self.logical_card.hide()
 
         # === Butonlar ===
         btn_row = QHBoxLayout()
@@ -1648,6 +1701,11 @@ class ForensicWidget(QWidget):
 
     # -- Kucuk UI durum degisimleri ------------------------------------------
     def _on_target_os_change(self, *_args):
+        # Mantiksal imajin kok yolu, kullanici elle degistirmediyse (hala
+        # eski OS'in varsayilani) yeni OS'in varsayilanina gecer.
+        eski_varsayilan, yeni_varsayilan = ("/", "C:\\") if self.radio_os_windows.isChecked() else ("C:\\", "/")
+        if self.entry_logical_root.text().strip() == eski_varsayilan:
+            self.entry_logical_root.setText(yeni_varsayilan)
         if self.radio_os_windows.isChecked():
             self.lbl_disk_path.setText(t("tool_disk_number_label", self.lang))
             self.lbl_remote_path.setText(t("tool_remote_path_label_win", self.lang))
@@ -1667,12 +1725,9 @@ class ForensicWidget(QWidget):
             self.check_compress.setChecked(False)
 
     def _on_acq_type_change(self, *_args):
-        if self.radio_acq_disk.isChecked():
-            self.disk_card.show()
-            self.file_card.hide()
-        else:
-            self.file_card.show()
-            self.disk_card.hide()
+        self.disk_card.setVisible(self.radio_acq_disk.isChecked())
+        self.file_card.setVisible(self.radio_acq_file.isChecked())
+        self.logical_card.setVisible(self.radio_acq_logical.isChecked())
 
     def _get_block_size_mb(self):
         return int(self.combo_block_size.currentText().split()[0])
@@ -1731,6 +1786,11 @@ class ForensicWidget(QWidget):
         path = QFileDialog.getExistingDirectory(self, t("tool_dialog_output_folder", self.lang))
         if path:
             self.entry_file_out.setText(path)
+
+    def _browse_logical_out(self):
+        path = QFileDialog.getExistingDirectory(self, t("tool_dialog_output_folder", self.lang))
+        if path:
+            self.entry_logical_out.setText(path)
 
     def _browse_remote_path(self):
         """
@@ -1894,6 +1954,8 @@ class ForensicWidget(QWidget):
                 self._start_disk_windows()
             else:
                 self._start_disk_linux()
+        elif self.radio_acq_logical.isChecked():
+            self._start_file(logical=True)
         else:
             self._start_file()
 
@@ -1942,9 +2004,15 @@ class ForensicWidget(QWidget):
         ctx.update(disk=disk, out_path=out_path, mode=mode, password=password, block_size_mb=self._get_block_size_mb(), compress=compress, segment_size_bytes=self._get_segment_size_bytes())
         self._begin_acquisition("linux_disk", ctx, f"MOD: {mode.upper()} | DISK: {disk} | ÇIKTI: {out_path}")
 
-    def _start_file(self):
-        remote_path = self.entry_remote_path.text().strip()
-        out_dir = self.entry_file_out.text().strip()
+    def _start_file(self, logical=False):
+        """logical=True: mantiksal imaj (kok yol + cikti klasoru ayri alanlardan
+        okunur, ayni worker kolu `logical` bayragiyla farkli motoru cagirir)."""
+        if logical:
+            remote_path = self.entry_logical_root.text().strip()
+            out_dir = self.entry_logical_out.text().strip()
+        else:
+            remote_path = self.entry_remote_path.text().strip()
+            out_dir = self.entry_file_out.text().strip()
         password = self.entry_pass.text().strip() or None
         if not remote_path:
             self._show_error(t("tool_err_remote_path_required", self.lang))
@@ -1957,8 +2025,10 @@ class ForensicWidget(QWidget):
         ctx.update(
             remote_path=remote_path, out_dir=out_dir, password=password,
             target_os="windows" if self.radio_os_windows.isChecked() else "linux",
+            logical=logical,
         )
-        self._begin_acquisition("file", ctx, f"UZAK YOL: {remote_path} | ÇIKTI: {out_dir}")
+        etiket = "MANTIKSAL İMAJ KÖKÜ" if logical else "UZAK YOL"
+        self._begin_acquisition("file", ctx, f"{etiket}: {remote_path} | ÇIKTI: {out_dir}")
 
     def _begin_acquisition(self, kind, ctx, header_line):
         self.btn_acquire.setEnabled(False)

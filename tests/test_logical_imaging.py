@@ -190,6 +190,26 @@ def test_linux_logical_resume_skips_already_acquired(tmp_path):
     assert len(manifest["acquired"]) == 3
 
 
+def test_incomplete_manifest_lookup_separates_logical_from_folder_mode():
+    """Ayni kok yol ("/") hem klasor hem mantiksal imajda secilebilir --
+    yarim kalan biri digerinin devam teklifine karismamali. 'mode' alani
+    olmayan eski manifestler klasor modu sayilir."""
+    def yaz(ad, **alanlar):
+        veri = {"remote_root": "/", "host": "h", "acquired_files": [], "total_files": 5, **alanlar}
+        with open(os.path.join(ia.MANIFEST_DIR, ad), "w", encoding="utf-8") as f:
+            import json
+            json.dump(veri, f)
+
+    os.makedirs(ia.MANIFEST_DIR, exist_ok=True)
+    yaz("manifest_tree_20260101-000001.json")                      # eski: mode yok
+    yaz("manifest_tree_20260101-000002.json", mode="logical")
+
+    yol_dosya, _ = ia.find_incomplete_tree_manifest("/", host="h")
+    yol_mantiksal, _ = ia.find_incomplete_tree_manifest("/", host="h", mode="logical")
+    assert yol_dosya.endswith("000001.json")
+    assert yol_mantiksal.endswith("000002.json")
+
+
 # ---------------------------------------------------------------------------
 # Windows: gercek PowerShell
 # ---------------------------------------------------------------------------

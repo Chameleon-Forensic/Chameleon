@@ -178,8 +178,14 @@ def _new_tree_manifest_path():
     return os.path.join(MANIFEST_DIR, f"manifest_tree_{timestamp}.json")
 
 
-def find_incomplete_tree_manifest(remote_root, host=None):
+def find_incomplete_tree_manifest(remote_root, host=None, mode="file"):
     """
+    mode: "file" (klasor/dosya) ya da "logical" (mantiksal imaj) -- ayni
+    kok yol ("/") iki modda da secilebilecegi icin yarim kalan bir mantiksal
+    imaj, klasor modunun devam teklifine karismasin diye. "mode" alani
+    olmayan eski manifestler "file" sayilir.
+
+
     find_incomplete_manifest ile AYNI desen (host guvenlik kontrolu dahil,
     bkz. yukaridaki fonksiyonun docstring'i -- ayni gerekce burada da
     gecerli: iki farkli hedef makinede ayni remote_root yolu -- orn.
@@ -201,6 +207,8 @@ def find_incomplete_tree_manifest(remote_root, host=None):
         if veri is None:
             continue
         if veri.get("remote_root") != remote_root:
+            continue
+        if veri.get("mode", "file") != mode:
             continue
         manifest_host = veri.get("host")
         if host is not None and manifest_host is not None and manifest_host != host:

@@ -55,6 +55,51 @@ def test_forensic_widget_builds_in_every_language(qapp, lang):
 
 
 @pytest.mark.parametrize("lang", LANGUAGES)
+def test_logical_image_option_is_translated_in_every_language(qapp, lang):
+    """"Mantıksal İmaj" radyo düğmesi ve kartı her dilde kendi çevirisini
+    göstermeli -- TR metnine takılı kalmış bir çağrıyı yakalar."""
+    from strings import t
+    widget = gui_v2.ForensicWidget(lang=lang)
+    qapp.processEvents()
+    try:
+        assert widget.radio_acq_logical.text() == t("tool_acq_logical", lang)
+        assert t("tool_logical_note", lang) in _all_texts(widget)
+        if lang != "tr":
+            assert t("tool_acq_logical", lang) != t("tool_acq_logical", "tr")
+    finally:
+        widget.deleteLater()
+        qapp.processEvents()
+
+
+def test_acquisition_type_switches_visible_card(qapp):
+    """Üç seçenek (Tam Disk / Dosya-Klasör / Mantıksal) sırayla SADECE kendi
+    kartını göstermeli; Windows'a geçince mantıksal kök yol varsayılanı da
+    C:\\ olmalı, elle değiştirilmişse dokunulmamalı."""
+    widget = gui_v2.ForensicWidget(lang="en")
+    qapp.processEvents()
+    try:
+        # isVisible() pencere gösterilmediği için hep False; açıkça gizlenip
+        # gizlenmediğine (isHidden) bakılır.
+        widget.radio_acq_logical.setChecked(True)
+        assert not widget.logical_card.isHidden()
+        assert widget.disk_card.isHidden() and widget.file_card.isHidden()
+        widget.radio_acq_file.setChecked(True)
+        assert widget.logical_card.isHidden() and not widget.file_card.isHidden()
+        widget.radio_acq_disk.setChecked(True)
+        assert widget.logical_card.isHidden() and not widget.disk_card.isHidden()
+
+        assert widget.entry_logical_root.text() == "/"
+        widget.radio_os_windows.setChecked(True)
+        assert widget.entry_logical_root.text() == "C:\\"
+        widget.entry_logical_root.setText("D:\\")
+        widget.radio_os_linux.setChecked(True)
+        assert widget.entry_logical_root.text() == "D:\\"
+    finally:
+        widget.deleteLater()
+        qapp.processEvents()
+
+
+@pytest.mark.parametrize("lang", LANGUAGES)
 def test_ram_engine_widget_builds_in_every_language(qapp, lang):
     widget = ram_gui.RamEngineWidget(lang=lang)
     qapp.processEvents()
