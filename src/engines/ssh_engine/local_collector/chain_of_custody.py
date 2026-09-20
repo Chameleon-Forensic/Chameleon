@@ -57,6 +57,11 @@ EVENT_HOST_KEY_VERIFICATION_SKIPPED = "HOST_KEY_VERIFICATION_SKIPPED"
 # ait kalir, output_path ise artik .gz dosyasini gosterir; bu olay bu
 # donusumun ne zaman/ne oranda oldugunu delil zincirinde acikca kaydeder.
 EVENT_IMAGE_COMPRESSED = "IMAGE_COMPRESSED"
+# Mantiksal imajda (docs/roadmap.md madde 0.5) bazi ogeler BILEREK alinmadi
+# (kilitli/degisken sistem dosyalari, yansima noktalari) -- imajda neyin
+# NEDEN olmadigi delil zincirinde acikca gorunsun diye tek bir ozet olarak
+# kaydedilir; tam liste manifest_files.json'daki "excluded" alanindadir.
+EVENT_LOGICAL_EXCLUSIONS = "LOGICAL_EXCLUSIONS"
 
 # Bu çalıştırmaya ait log dosyasının yolu (ilk log_event çağrısında oluşur)
 _current_log_file = None

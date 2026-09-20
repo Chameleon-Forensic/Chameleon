@@ -34,6 +34,8 @@ from image_acquirer import (
 )
 
 MAX_RETRY_PER_BLOCK = 3
+# bkz. file_acquirer.LOGICAL_MANIFEST_EVERY (dongusel import olmasin diye burada tekrar)
+LOGICAL_MANIFEST_EVERY = 100
 
 
 def powershell_quote(value):
@@ -434,47 +436,275 @@ def get_remote_file_hash_windows(ssh, remote_path):
     return out or None
 
 
-def acquire_remote_file_windows(ssh, remote_path, local_path):
-    """Dosyayi Base64 olarak ceker, yazmadan ONCE hash dogrular."""
-    uzak_hash = get_remote_file_hash_windows(ssh, remote_path)
-    if uzak_hash is None:
-        return False, None
+# Mantiksal imaj (docs/roadmap.md madde 0.5) icin: dosya sistemini tarayip
+# HER dosyayi alan bir modda tek `ReadAllBytes` cagrisi iki sorunlu --
+# birkac GB'lik bir dosya bellege sigmaz / .NET'in 2 GB dizi sinirina takilir,
+# ve File.ReadAllBytes paylasimi kisitli acar (baska bir islem yazmak icin
+# actiysa, orn. calisan bir log dosyasi, okuyamaz). Bu yuzden dosyalar
+# FileShare ReadWrite+Delete ile acilir; kucuk dosyalar TEK bir SSH
+# cagrisinda (hash+veri birlikte), buyukler Linux tarafiyla AYNI blok+
+# dogrulama desenini kullanir.
+SMALL_FILE_LIMIT = 4 * 1024 * 1024
+FILE_BLOCK_MB = 4
 
-    safe = powershell_quote(remote_path)
-    ps = f"[Convert]::ToBase64String([System.IO.File]::ReadAllBytes({safe}))"
-    out, _err, _code = ssh.run_command(ps)
-    if not out:
-        return False, None
+# HResult -> sebep. Hata METNI yerine istisna turu/HResult kullaniliyor:
+# metin isletim sisteminin diline gore degisir (Turkce Windows'ta Turkce).
+_HRESULT_REASONS = {
+    -2147024864: "kilitli (baska bir islem kullaniyor)",   # ERROR_SHARING_VIOLATION
+    -2147024863: "kilitli (baska bir islem kullaniyor)",   # ERROR_LOCK_VIOLATION
+}
+
+
+def _explain_ps_error(type_name, hresult):
+    if type_name == "UnauthorizedAccessException":
+        return "izin yok (erisim engellendi)"
+    if type_name in ("FileNotFoundException", "DirectoryNotFoundException"):
+        return "dosya alma sirasinda kayboldu"
     try:
-        veri = base64.b64decode(out.strip())
-    except Exception:
+        sebep = _HRESULT_REASONS.get(int(hresult))
+    except (TypeError, ValueError):
+        sebep = None
+    return sebep or f"okuma hatasi ({type_name})"
+
+
+# Bu sebepler tekrar denemekle duzelmez -- yeniden deneme dongusu bosuna
+# zaman kaybetmesin (binlerce kilitli dosyali bir sistem imajinda onemli).
+_PERMANENT_REASON_PREFIXES = ("kilitli", "izin yok", "dosya alma sirasinda kayboldu")
+
+
+def _parse_ps_error(out):
+    """'ERR|<TurAdi>|<HResult>' ise sebep metnini, degilse None doner."""
+    if not out or not out.startswith("ERR|"):
+        return None
+    parcalar = out.split("|", 2)
+    tur = parcalar[1] if len(parcalar) > 1 else ""
+    hresult = parcalar[2] if len(parcalar) > 2 else ""
+    return _explain_ps_error(tur, hresult)
+
+
+def _file_open_prefix(path):
+    return (
+        f"$ErrorActionPreference = 'Stop'; try {{ "
+        f"$fs = [System.IO.File]::Open({powershell_quote(path)}, 'Open', 'Read', 'ReadWrite, Delete'); "
+        f"try {{ "
+    )
+
+
+# PowerShell .NET metot cagrisindaki istisnalari MethodInvocationException
+# icine sarar -- gercek tur/HResult InnerException'dadir (gercek PowerShell'le
+# calisan tests/test_logical_imaging.py'nin yakaladigi bir hata).
+_FILE_CLOSE_SUFFIX = (
+    " } finally { $fs.Close() } "
+    "} catch { $x = $_.Exception; if ($x.InnerException) { $x = $x.InnerException }; "
+    "'ERR|' + $x.GetType().Name + '|' + $x.HResult }"
+)
+
+# $buf'a $len bayt (dosya bitene kadar) doldurur -- FileStream.Read'in tek
+# cagrida tam okumasi garanti degildir.
+_FILL_BUF = (
+    "$r = 0; while ($r -lt $len) { $n = $fs.Read($buf, $r, $len - $r); if ($n -le 0) { break }; $r += $n }; "
+)
+_HASH_BUF = (
+    "$h = [System.BitConverter]::ToString("
+    "[System.Security.Cryptography.SHA256]::Create().ComputeHash($buf, 0, $r)).Replace('-','').ToLower(); "
+)
+
+
+def _small_or_large_script(path):
+    return (
+        _file_open_prefix(path)
+        + f"$len = $fs.Length; if ($len -le {SMALL_FILE_LIMIT}) {{ $buf = New-Object byte[] $len; "
+        + _FILL_BUF + _HASH_BUF
+        + "'S|' + $h + '|' + [Convert]::ToBase64String($buf, 0, $r) } else { 'L|' + $len }"
+        + _FILE_CLOSE_SUFFIX
+    )
+
+
+def _file_block_script(path, offset, length, want_data):
+    cikti = "[Convert]::ToBase64String($buf, 0, $r)" if want_data else "$h"
+    return (
+        _file_open_prefix(path)
+        + f"$fs.Seek({offset}, 'Begin') | Out-Null; $len = {length}; $buf = New-Object byte[] $len; "
+        + _FILL_BUF + ("" if want_data else _HASH_BUF)
+        + cikti
+        + _FILE_CLOSE_SUFFIX
+    )
+
+
+def acquire_remote_file_windows(ssh, remote_path, local_path, reason_out=None):
+    """
+    Dosyayi alir, yazmadan ONCE hash dogrular. Kucuk dosya (<= 4 MB) TEK SSH
+    cagrisinda; buyuk dosya blok blok (Linux'taki acquire_remote_file ile AYNI
+    desen: uzak hash -> veri -> yerel dogrulama, blok basina yeniden deneme,
+    baglanti koparsa KALDIGI BLOKTAN devam).
+
+    reason_out (dict) verilirse basarisizlikta reason_out["reason"]'a kisa bir
+    sebep yazilir (kilitli/izin yok/...) -- mantiksal imaj raporu icin.
+    Donus: (basarili, sha256_veya_None) -- imza eskiyle AYNI.
+    """
+    def _fail(sebep):
+        if reason_out is not None:
+            reason_out["reason"] = sebep
         return False, None
 
-    gercek_hash = hashlib.sha256(veri).hexdigest()
-    if gercek_hash != uzak_hash:
-        return False, gercek_hash
+    def _run(ps):
+        return (ssh.run_command(ps)[0] or "").strip()
+
+    if getattr(ssh, "client", True) is None:
+        return _fail("baglanti yok")
+
+    ilk = None
+    for _ in range(MAX_RETRY_PER_BLOCK + 1):
+        if not ensure_connection(ssh):
+            return _fail("baglanti koptu")
+        ilk = _run(_small_or_large_script(remote_path))
+        sebep = _parse_ps_error(ilk)
+        if sebep and sebep.startswith(_PERMANENT_REASON_PREFIXES):
+            return _fail(sebep)
+        if ilk and not sebep:
+            break
+    else:
+        return _fail(_parse_ps_error(ilk) or "okuma/dogrulama hatasi")
 
     os.makedirs(os.path.dirname(local_path) or ".", exist_ok=True)
-    with open(local_path, "wb") as f:
-        f.write(veri)
 
-    return True, gercek_hash
+    if ilk.startswith("S|"):
+        parcalar = ilk.split("|", 2)
+        try:
+            veri = base64.b64decode(parcalar[2]) if len(parcalar) > 2 else b""
+        except Exception:
+            return _fail("okuma/dogrulama hatasi")
+        gercek_hash = hashlib.sha256(veri).hexdigest()
+        if gercek_hash != parcalar[1]:
+            return _fail("dogrulama hatasi (hash uyusmuyor)")
+        with open(local_path, "wb") as f:
+            f.write(veri)
+        return True, gercek_hash
+
+    if not ilk.startswith("L|"):
+        return _fail("okuma/dogrulama hatasi")
+
+    try:
+        boyut = int(ilk.split("|", 1)[1])
+    except ValueError:
+        return _fail("okuma/dogrulama hatasi")
+
+    block_bytes = FILE_BLOCK_MB * 1024 * 1024
+    total_blocks = (boyut + block_bytes - 1) // block_bytes
+    hasher = hashlib.sha256()
+    with open(local_path, "wb") as cikti:
+        for block_no in range(total_blocks):
+            offset = block_no * block_bytes
+            length = min(block_bytes, boyut - offset)
+            veri = None
+            for _ in range(MAX_RETRY_PER_BLOCK + 1):
+                if not ensure_connection(ssh):
+                    break
+                uzak_hash = _run(_file_block_script(remote_path, offset, length, want_data=False))
+                if not uzak_hash or uzak_hash.startswith("ERR|"):
+                    continue
+                b64 = _run(_file_block_script(remote_path, offset, length, want_data=True))
+                if not b64 or b64.startswith("ERR|"):
+                    continue
+                try:
+                    aday = base64.b64decode(b64)
+                except Exception:
+                    continue
+                if hashlib.sha256(aday).hexdigest() == uzak_hash:
+                    veri = aday
+                    break
+            if veri is None:
+                cikti.close()
+                try:
+                    os.remove(local_path)  # yarim/dogrulanmamis dosya gercek bir kopya gibi durmasin
+                except OSError:
+                    pass
+                return _fail(f"blok {block_no} okunamadi/dogrulanamadi")
+            cikti.write(veri)
+            hasher.update(veri)
+    return True, hasher.hexdigest()
+
+
+# ---------------------------------------------------------------------------
+# Mantiksal imaj (docs/roadmap.md madde 0.5)
+# ---------------------------------------------------------------------------
+# Hacim kokundeki, SISTEM tarafindan surekli acik/kilitli tutulan dosyalar --
+# canli sistemde okunamazlar, imaj icinde anlam tasimazlar. Bilerek
+# dislanir ve raporda "dislanan" olarak ayri listelenir (basarisiz DEGIL).
+_WINDOWS_EXCLUDED_ROOT_FILES = {
+    "pagefile.sys": "sanal bellek dosyasi (surekli kilitli)",
+    "hiberfil.sys": "hazirda bekletme dosyasi (surekli kilitli)",
+    "swapfile.sys": "uygulama takas dosyasi (surekli kilitli)",
+}
+_WINDOWS_EXCLUDED_DIR_NAME = "system volume information"
+
+
+def _logical_walk_script(root):
+    """Yansima noktalarini (junction/symlink -- dongu riski) ATLAYAN, gizli/
+    sistem ogeleri (-Force) DAHIL, erisilemeyen klasorleri 'ERR|' ile
+    raporlayan ozyinelemeli tarama. Cikti satirlari: F|<dosya>, ERR|<klasor>,
+    SKIP|<klasor>."""
+    return (
+        "$ErrorActionPreference = 'SilentlyContinue'; "
+        "function W($d) { $e = $null; "
+        "$items = Get-ChildItem -LiteralPath $d -Force -ErrorVariable e -ErrorAction SilentlyContinue; "
+        "if ($e) { 'ERR|' + $d }; "
+        "foreach ($i in $items) { "
+        "if ($i.Attributes -band [System.IO.FileAttributes]::ReparsePoint) { continue }; "
+        "if ($i.PSIsContainer) { "
+        f"if ($i.Name -ieq '{_WINDOWS_EXCLUDED_DIR_NAME}') {{ 'SKIP|' + $i.FullName }} else {{ W $i.FullName }} "
+        "} else { 'F|' + $i.FullName } } }; "
+        f"W {powershell_quote(root)}"
+    )
+
+
+def list_logical_files_windows(ssh, remote_root, password=None):
+    """file_acquirer.list_logical_files'in Windows karsiligi -- bkz. orasi.
+    Donus: (dosyalar, onceden_basarisiz, dislanan) -- ikisi de {yol: sebep}."""
+    out, _err, _code = ssh.run_command(_logical_walk_script(remote_root))
+    kok = remote_root.rstrip("\\/").lower()
+    dosyalar, onceden_basarisiz, dislanan = [], {}, {}
+    for satir in (out or "").splitlines():
+        satir = satir.rstrip("\r\n")
+        tur, _, yol = satir.partition("|")
+        if not yol:
+            continue
+        if tur == "F":
+            # Sadece hacim KOKUNDEKI sistem dosyalari dislanir (baska bir
+            # klasordeki ayni adli bir dosya normal bir kullanici dosyasidir).
+            rel = yol[len(kok) + 1:] if yol.lower().startswith(kok + "\\") else None
+            if rel is not None and "\\" not in rel and rel.lower() in _WINDOWS_EXCLUDED_ROOT_FILES:
+                dislanan[yol] = _WINDOWS_EXCLUDED_ROOT_FILES[rel.lower()]
+            else:
+                dosyalar.append(yol)
+        elif tur == "ERR":
+            onceden_basarisiz[yol] = "klasor okunamadi (izin yok)"
+        elif tur == "SKIP":
+            dislanan[yol] = "sistem klasoru (erisim kisitli, degisken)"
+    return dosyalar, onceden_basarisiz, dislanan
 
 
 def acquire_remote_tree_windows(ssh, remote_root, output_dir, progress_callback=None,
-                                 manifest_path=None, resume_state=None, host=None):
+                                 manifest_path=None, resume_state=None, host=None,
+                                 file_lister=None, manifest_every=1, mode="file"):
     """file_acquirer.acquire_remote_tree ile ayni davranis (resume destegi
     dahil, bkz. o fonksiyonun docstring'i -- docs/roadmap.md madde 0.4),
-    Windows yollari (ters slash) ve PowerShell komutlariyla."""
+    Windows yollari (ters slash) ve PowerShell komutlariyla.
+    file_lister/manifest_every/mode: mantiksal imaj icin, bkz. orasi."""
     kind = remote_path_kind_windows(ssh, remote_root)
     if kind is None:
         coc.log_event(coc.EVENT_EXAM_ERROR, f"Yol bulunamadi (Windows): {remote_root}")
         return None
 
     norm_root = remote_root.replace("\\", "/")
+    onceden_basarisiz = {}
+    dislanan = {}
     if kind == "file":
         dosyalar = [remote_root]
         taban = norm_root.rsplit("/", 1)[0] if "/" in norm_root else ""
+    elif file_lister is not None:
+        dosyalar, onceden_basarisiz, dislanan = file_lister(ssh, remote_root, None)
+        taban = norm_root
     else:
         dosyalar = list_remote_files_windows(ssh, remote_root)
         taban = norm_root
@@ -497,15 +727,28 @@ def acquire_remote_tree_windows(ssh, remote_root, output_dir, progress_callback=
             f"Dosya/klasor alma baslatildi (Windows): {remote_root} ({len(dosyalar)} dosya)",
         )
 
-    toplam = len(dosyalar)
+    n_pre = len(onceden_basarisiz)
+    toplam = len(dosyalar) + n_pre
     sonuclar = list((resume_state or {}).get("acquired_detail", []))
-    basarisiz = []
+    basarisiz = list(onceden_basarisiz)
+    failed_reasons = dict(onceden_basarisiz)
     acquired_files = list(onceden_alinan)
+    if n_pre:
+        coc.log_event(
+            coc.EVENT_EXAM_ERROR,
+            f"{n_pre} klasor okunamadigi icin (izin yok) taranamadi (Windows): {remote_root}",
+        )
+    if dislanan:
+        coc.log_event(
+            coc.EVENT_LOGICAL_EXCLUSIONS,
+            f"{len(dislanan)} oge bilerek dislandi (kilitli/degisken sistem ogesi, Windows): {remote_root}",
+        )
 
     def _yaz_kalici_manifest():
         _write_manifest(manifest_path, {
             "remote_root": remote_root,
             "host": host,
+            "mode": mode,
             "total_files": toplam,
             "acquired_files": acquired_files,
             "acquired_detail": sonuclar,
@@ -516,7 +759,7 @@ def acquire_remote_tree_windows(ssh, remote_root, output_dir, progress_callback=
     for i, uzak_dosya in enumerate(dosyalar, start=1):
         if uzak_dosya in onceden_alinan:
             if progress_callback:
-                progress_callback(i, toplam)
+                progress_callback(i + n_pre, toplam)
             continue
 
         norm_dosya = uzak_dosya.replace("\\", "/")
@@ -524,19 +767,25 @@ def acquire_remote_tree_windows(ssh, remote_root, output_dir, progress_callback=
         goreli = goreli.replace("/", os.sep)
         yerel_dosya = os.path.join(output_dir, goreli)
 
-        basarili, hash_deger = acquire_remote_file_windows(ssh, uzak_dosya, yerel_dosya)
+        sebep_bilgisi = {}
+        basarili, hash_deger = acquire_remote_file_windows(ssh, uzak_dosya, yerel_dosya, reason_out=sebep_bilgisi)
         if basarili:
             sonuclar.append({"remote_path": uzak_dosya, "local_path": yerel_dosya, "sha256": hash_deger})
             acquired_files.append(uzak_dosya)
             coc.log_event(coc.EVENT_BLOCK_ACQUIRED, f"Dosya alindi ve dogrulandi (Windows): {uzak_dosya}", hash_deger)
         else:
             basarisiz.append(uzak_dosya)
-            coc.log_event(coc.EVENT_EXAM_ERROR, f"Dosya alinamadi/dogrulanamadi (Windows): {uzak_dosya}")
+            failed_reasons[uzak_dosya] = sebep_bilgisi.get("reason", "okuma/dogrulama hatasi")
+            coc.log_event(
+                coc.EVENT_EXAM_ERROR,
+                f"Dosya alinamadi/dogrulanamadi (Windows, {failed_reasons[uzak_dosya]}): {uzak_dosya}",
+            )
 
-        _yaz_kalici_manifest()
+        if i % manifest_every == 0:
+            _yaz_kalici_manifest()
 
         if progress_callback:
-            progress_callback(i, toplam)
+            progress_callback(i + n_pre, toplam)
 
     coc.log_event(
         coc.EVENT_EXAM_END,
@@ -544,14 +793,19 @@ def acquire_remote_tree_windows(ssh, remote_root, output_dir, progress_callback=
         f"{len(basarisiz)} basarisiz",
     )
 
-    if not basarisiz and len(acquired_files) == toplam:
+    # Mantiksal imajda bazi dosyalar KALICI olarak alinamaz -- bkz.
+    # file_acquirer.acquire_remote_tree'deki AYNI gerekce.
+    if (not basarisiz and len(acquired_files) == toplam) or mode != "file":
         delete_manifest(manifest_path)
 
     manifest = {
         "remote_root": remote_root,
+        "mode": mode,
         "total_files": toplam,
         "acquired": sonuclar,
         "failed": basarisiz,
+        "failed_reasons": failed_reasons,
+        "excluded": dislanan,
         "acquired_at": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -561,3 +815,15 @@ def acquire_remote_tree_windows(ssh, remote_root, output_dir, progress_callback=
         json.dump(manifest, f, indent=2, ensure_ascii=False)
 
     return manifest
+
+
+def acquire_logical_image_windows(ssh, remote_root, output_dir, progress_callback=None,
+                                   manifest_path=None, resume_state=None, host=None):
+    """Mantiksal imaj (Windows): remote_root'un (orn. C:\\) var olan TUM
+    dosyalari; kilitli hacim-koku sistem dosyalari dislanir, okunamayanlar
+    sebepleriyle raporlanir. file_acquirer.acquire_logical_image'in karsiligi."""
+    return acquire_remote_tree_windows(
+        ssh, remote_root, output_dir, progress_callback=progress_callback,
+        manifest_path=manifest_path, resume_state=resume_state, host=host,
+        file_lister=list_logical_files_windows, manifest_every=LOGICAL_MANIFEST_EVERY, mode="logical",
+    )

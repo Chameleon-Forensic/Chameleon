@@ -65,6 +65,41 @@ def list_remote_files(ssh, remote_dir, password=None):
     return [satir for satir in out.splitlines() if satir.strip()]
 
 
+def list_logical_files(ssh, remote_root, password=None):
+    """
+    Mantiksal imaj (bkz. docs/roadmap.md madde 0.5) icin dosya listesi.
+
+    list_remote_files'tan farki: `-xdev` -- find, remote_root'un ait oldugu
+    dosya sisteminin (bolumun) DISINA cikmaz. Boylece /proc, /sys, /dev,
+    /run gibi sahte/ucucu dosya sistemleri ve baska bolumler/ag
+    paylasimlari (NFS vb.) hicbir ozel dislama listesi gerekmeden disarida
+    kalir -- bir mantiksal imaj tek bir HACMI (volume) temsil eder, baska
+    bir bolum icin ayri alinmalidir.
+
+    Sudo parolasi YOKSA okunamayan dosyalar (find ! -readable) TEK bir
+    komutla toplu tespit edilir ve alma dongusune hic sokulmaz -- aksi
+    halde her biri 4 yeniden denemeyle (hash+okuma) zaman kaybettirirdi.
+
+    Donus: (dosyalar, onceden_basarisiz, dislanan) -- ikisi de {yol: sebep}.
+    onceden_basarisiz BEKLENMEYEN eksikler (izin yok); dislanan bilerek
+    alinmayanlar (Linux'ta -xdev ile otomatik, ayrica listelenecek bir sey yok).
+    """
+    safe = shlex.quote(remote_root)
+    run = (lambda c: ssh.run_command(c, sudo_password=password)) if password else ssh.run_command
+
+    out, _err, _code = run(f"find {safe} -xdev -type f")
+    dosyalar = [s for s in (out or "").splitlines() if s.strip()]
+
+    onceden_basarisiz = {}
+    if not password:
+        out, _err, _code = run(f"find {safe} -xdev -type f ! -readable")
+        for s in (out or "").splitlines():
+            if s.strip():
+                onceden_basarisiz[s] = "izin yok (okunamiyor)"
+        dosyalar = [d for d in dosyalar if d not in onceden_basarisiz]
+    return dosyalar, onceden_basarisiz, {}
+
+
 def list_remote_directory(ssh, remote_path, password=None):
     """
     remote_path'in DOGRUDAN alt ogelerini (bir seviye, -maxdepth 1) doner --
@@ -231,9 +266,36 @@ def acquire_remote_file(ssh, remote_path, local_path, password=None, block_size_
     return True, hasher.hexdigest()
 
 
+def _diagnose_failure(ssh, remote_path, password=None):
+    """Bir dosya alinamayinca (SADECE o zaman -- basarili dosyalara ek
+    maliyet yok) sebebini kisa bir metin olarak doner; mantiksal imaj
+    raporunda operatorun neyin neden eksik oldugunu gorebilmesi icin."""
+    safe = shlex.quote(remote_path)
+    cmd = f"test -e {safe} && (test -r {safe} && echo OK || echo DENIED) || echo GONE"
+    out, _err, _code = (ssh.run_command(cmd, sudo_password=password) if password else ssh.run_command(cmd))
+    durum = (out or "").strip()
+    if durum == "DENIED":
+        return "izin yok (okunamiyor)"
+    if durum == "GONE":
+        return "dosya alma sirasinda kayboldu"
+    return "okuma/dogrulama hatasi"
+
+
 def acquire_remote_tree(ssh, remote_root, output_dir, password=None, progress_callback=None,
-                         manifest_path=None, resume_state=None, host=None):
+                         manifest_path=None, resume_state=None, host=None,
+                         file_lister=None, manifest_every=1, mode="file"):
     """
+    file_lister/manifest_every/mode: mantiksal imaj (docs/roadmap.md madde
+    0.5) icin. file_lister(ssh, root, password) -> (dosyalar, onceden_
+    basarisiz{yol: sebep}) verilirse klasor listesi `find -type f` yerine
+    ondan gelir; manifest_every=N her N dosyada bir kalici manifest yazar
+    (varsayilan 1 = eski davranis -- yuz binlerce dosyada her dosyadan
+    sonra TUM manifest JSON'unu bastan yazmak O(n^2) maliyet olurdu; kesintide
+    en fazla N dosya yeniden alinir, hedef dosya uzerine yazildigi icin
+    zararsiz).
+
+    Donus manifest'ine `failed_reasons` ({yol: sebep}) ve `mode` eklenir.
+
     remote_root bir dosya ya da klasor olabilir. Klasorse altindaki tum
     dosyalari (find -type f) tek tek acquire_remote_file ile alir, goreli
     dizin yapisini output_dir altinda korur. Tek dosyaysa dogrudan onu alir.
@@ -257,9 +319,14 @@ def acquire_remote_tree(ssh, remote_root, output_dir, password=None, progress_ca
         coc.log_event(coc.EVENT_EXAM_ERROR, f"Yol bulunamadi: {remote_root}")
         return None
 
+    onceden_basarisiz = {}
+    dislanan = {}
     if kind == "file":
         dosyalar = [remote_root]
         taban = os.path.dirname(remote_root)
+    elif file_lister is not None:
+        dosyalar, onceden_basarisiz, dislanan = file_lister(ssh, remote_root, password)
+        taban = remote_root
     else:
         dosyalar = list_remote_files(ssh, remote_root, password=password)
         taban = remote_root
@@ -282,15 +349,28 @@ def acquire_remote_tree(ssh, remote_root, output_dir, password=None, progress_ca
             f"Dosya/klasor alma baslatildi: {remote_root} ({len(dosyalar)} dosya)",
         )
 
-    toplam = len(dosyalar)
+    n_pre = len(onceden_basarisiz)
+    toplam = len(dosyalar) + n_pre
     sonuclar = list((resume_state or {}).get("acquired_detail", []))
-    basarisiz = []
+    basarisiz = list(onceden_basarisiz)
+    failed_reasons = dict(onceden_basarisiz)
     acquired_files = list(onceden_alinan)
+    if n_pre:
+        coc.log_event(
+            coc.EVENT_EXAM_ERROR,
+            f"{n_pre} oge okunamadigi icin (izin yok) alma dongusune sokulmadi: {remote_root}",
+        )
+    if dislanan:
+        coc.log_event(
+            coc.EVENT_LOGICAL_EXCLUSIONS,
+            f"{len(dislanan)} oge bilerek dislandi (kilitli/degisken sistem ogesi): {remote_root}",
+        )
 
     def _yaz_kalici_manifest():
         _write_manifest(manifest_path, {
             "remote_root": remote_root,
             "host": host,
+            "mode": mode,
             "total_files": toplam,
             "acquired_files": acquired_files,
             "acquired_detail": sonuclar,
@@ -301,7 +381,7 @@ def acquire_remote_tree(ssh, remote_root, output_dir, password=None, progress_ca
     for i, uzak_dosya in enumerate(dosyalar, start=1):
         if uzak_dosya in onceden_alinan:
             if progress_callback:
-                progress_callback(i, toplam)
+                progress_callback(i + n_pre, toplam)
             continue
 
         goreli = os.path.relpath(uzak_dosya, taban) if taban else os.path.basename(uzak_dosya)
@@ -317,15 +397,21 @@ def acquire_remote_tree(ssh, remote_root, output_dir, password=None, progress_ca
             coc.log_event(coc.EVENT_BLOCK_ACQUIRED, f"Dosya alindi ve dogrulandi: {uzak_dosya}", hash_deger)
         else:
             basarisiz.append(uzak_dosya)
-            coc.log_event(coc.EVENT_EXAM_ERROR, f"Dosya alinamadi/dogrulanamadi: {uzak_dosya}")
+            failed_reasons[uzak_dosya] = _diagnose_failure(ssh, uzak_dosya, password)
+            coc.log_event(
+                coc.EVENT_EXAM_ERROR,
+                f"Dosya alinamadi/dogrulanamadi ({failed_reasons[uzak_dosya]}): {uzak_dosya}",
+            )
 
-        # Her dosyadan sonra KALICI manifest guncellenir -- boylece program
-        # kapanip yeniden acilsa bile kaldigi dosyadan devam edilebilir
-        # (bkz. image_acquirer.acquire_disk_image'deki AYNI desen).
-        _yaz_kalici_manifest()
+        # Her dosyadan sonra (manifest_every=1 iken) KALICI manifest
+        # guncellenir -- boylece program kapanip yeniden acilsa bile
+        # kaldigi dosyadan devam edilebilir (bkz. image_acquirer.
+        # acquire_disk_image'deki AYNI desen).
+        if i % manifest_every == 0:
+            _yaz_kalici_manifest()
 
         if progress_callback:
-            progress_callback(i, toplam)
+            progress_callback(i + n_pre, toplam)
 
     coc.log_event(
         coc.EVENT_EXAM_END,
@@ -333,16 +419,24 @@ def acquire_remote_tree(ssh, remote_root, output_dir, password=None, progress_ca
         f"{len(basarisiz)} basarisiz",
     )
 
-    if not basarisiz and len(acquired_files) == toplam:
+    tamamlandi_temiz = not basarisiz and len(acquired_files) == toplam
+    # Mantiksal imajda (mode != "file") bazi dosyalar KALICI olarak alinamaz
+    # (kilitli/izinsiz) -- islem BITTIYSE manifest yine kaldirilir, aksi
+    # halde "Yarim Kalanlar"da sonsuza kadar duran bir kayit olurdu; basarisiz
+    # dosyalar zaten manifest_files.json'da sebepleriyle listeli.
+    if tamamlandi_temiz or mode != "file":
         # Tum dosyalar eksiksiz alindi -- yarim kalmis bir islem olarak
         # tekrar sunulmamasi icin kalici manifest kaldirilir.
         delete_manifest(manifest_path)
 
     manifest = {
         "remote_root": remote_root,
+        "mode": mode,
         "total_files": toplam,
         "acquired": sonuclar,
         "failed": basarisiz,
+        "failed_reasons": failed_reasons,
+        "excluded": dislanan,
         "acquired_at": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -352,3 +446,20 @@ def acquire_remote_tree(ssh, remote_root, output_dir, password=None, progress_ca
         json.dump(manifest, f, indent=2, ensure_ascii=False)
 
     return manifest
+
+
+# Mantiksal imajda kalici manifest her N dosyada bir yazilir (bkz.
+# acquire_remote_tree docstring'i -- manifest_every).
+LOGICAL_MANIFEST_EVERY = 100
+
+
+def acquire_logical_image(ssh, remote_root, output_dir, password=None, progress_callback=None,
+                           manifest_path=None, resume_state=None, host=None):
+    """Mantiksal imaj (Linux): remote_root'un ait oldugu hacmin (volume)
+    var olan TUM dosyalari -- bkz. list_logical_files. Silinmis veri ve bos
+    alan alinmaz (o, Tam Disk modunun isi)."""
+    return acquire_remote_tree(
+        ssh, remote_root, output_dir, password=password, progress_callback=progress_callback,
+        manifest_path=manifest_path, resume_state=resume_state, host=host,
+        file_lister=list_logical_files, manifest_every=LOGICAL_MANIFEST_EVERY, mode="logical",
+    )
