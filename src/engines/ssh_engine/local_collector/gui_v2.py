@@ -1415,6 +1415,7 @@ class ForensicWidget(QWidget):
         disk_row4.addStretch()
         self.disk_card.body.addLayout(disk_row4)
         self.combo_segment_size.currentIndexChanged.connect(self._on_mode_change)
+        self.disk_card.body.addWidget(self._hint_label("tool_segment_hint"))
 
         # Sadece Offline Acquisition icin anlamli -- Live modda parcalar
         # resume ihtimaline karsi zaten korunuyor (concatenate_blocks
@@ -1423,6 +1424,7 @@ class ForensicWidget(QWidget):
         self.check_compress = widgets.Checkbox(t("tool_compress_checkbox", self.lang))
         self.check_compress.setEnabled(False)
         self.disk_card.body.addWidget(self.check_compress)
+        self.disk_card.body.addWidget(self._hint_label("tool_compress_hint"))
 
         for r in (self.radio_live, self.radio_offline):
             r.toggled.connect(self._on_mode_change)
@@ -1550,6 +1552,19 @@ class ForensicWidget(QWidget):
         # Vaka Bilgileri karti (varsa) en ustte kalsin, bilgi karti hemen altina
         body.insertWidget(1, info)
 
+        # Yönetici değilse görünür ama sessiz bir uyarı şeridi (bilgi kartının
+        # ÜSTÜNDE); yöneticiyse hiçbir şey gösterilmez.
+        self.admin_banner = None
+        if not is_admin():
+            self.admin_banner = QLabel(t("tool_local_admin_banner", self.lang))
+            self.admin_banner.setWordWrap(True)
+            self.admin_banner.setStyleSheet(
+                f"color:{ui.WARNING}; background-color:{ui.BG_SURFACE}; border:1px solid {ui.WARNING}; "
+                f"border-radius:{ui.RADIUS}px; padding:8px 12px; "
+                f"font-family:'{ui.FONT_UI}'; font-size:{ui.SIZE_HELPER}px; font-weight:600;"
+            )
+            body.insertWidget(1, self.admin_banner)
+
         self.ssh = LocalConnector()
         self._set_conn_indicator(True)
         self._log(f"[i] Yerel mod: bu bilgisayar ({platform.node()}) incelenecek, SSH kullanılmıyor.", "info")
@@ -1600,6 +1615,13 @@ class ForensicWidget(QWidget):
                 f"Yerel imaj: kaynak yol {root_path}, cikti: {out_path}, bilgisayar: {platform.node()}",
             )
         return True
+
+    def _hint_label(self, key):
+        """Form alanlarının altındaki küçük, satır kaydıran açıklama metni."""
+        lbl = QLabel(t(key, self.lang))
+        lbl.setWordWrap(True)
+        lbl.setStyleSheet(f"color:{ui.TEXT_SECONDARY}; font-family:'{ui.FONT_UI}'; font-size:{ui.SIZE_HELPER}px;")
+        return lbl
 
     def _labeled_row(self, body_layout, label_text, initial_value):
         row = QHBoxLayout()

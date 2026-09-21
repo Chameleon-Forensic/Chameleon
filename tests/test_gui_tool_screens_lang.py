@@ -71,6 +71,23 @@ def test_logical_image_option_is_translated_in_every_language(qapp, lang):
         qapp.processEvents()
 
 
+@pytest.mark.parametrize("lang", LANGUAGES)
+def test_segment_and_compress_hints_are_shown_in_every_language(qapp, lang):
+    """Segment boyutu / gzip açıklamaları her dilde kendi çevirisiyle görünmeli."""
+    from strings import t
+    widget = gui_v2.ForensicWidget(lang=lang)
+    qapp.processEvents()
+    try:
+        textler = _all_texts(widget)
+        assert t("tool_segment_hint", lang) in textler
+        assert t("tool_compress_hint", lang) in textler
+        if lang != "tr":
+            assert t("tool_compress_hint", lang) != t("tool_compress_hint", "tr")
+    finally:
+        widget.deleteLater()
+        qapp.processEvents()
+
+
 def test_acquisition_type_switches_visible_card(qapp):
     """Üç seçenek (Tam Disk / Dosya-Klasör / Mantıksal) sırayla SADECE kendi
     kartını göstermeli; Windows'a geçince mantıksal kök yol varsayılanı da
@@ -107,6 +124,11 @@ def test_local_mode_screen_builds_in_every_language(qapp, lang):
     widget = gui_v2.ForensicWidget(initial_connection_method="local", lang=lang)
     qapp.processEvents()
     try:
+        # yönetici uyarı şeridi: sadece yönetici DEĞİLKEN var, seçili dilde
+        if gui_v2.is_admin():
+            assert widget.admin_banner is None
+        else:
+            assert t("tool_local_admin_banner", lang) in _all_texts(widget)
         assert isinstance(widget.ssh, gui_v2.LocalConnector)
         assert widget.radio_os_windows.isChecked()
         assert widget.conn_method_value == "local"
