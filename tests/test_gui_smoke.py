@@ -37,7 +37,7 @@ def test_all_screens_render_without_crashing(window, qapp, lang):
 
     for handler in (
         window._show_direct_detail, window._show_vpn_detail,
-        window._show_tor_detail, window._show_ram_detail,
+        window._show_tor_detail, window._show_local_detail, window._show_ram_detail,
     ):
         handler()
         qapp.processEvents()
@@ -68,7 +68,7 @@ def test_method_info_has_all_fields_for_language(lang):
     """METHOD_INFO[method][lang] eksikse _show_method_detail KeyError
     ile cokerdi -- bu test onu GUI acmadan, daha hizli yakalar."""
     required_fields = {"title", "icon", "short", "what", "when", "requires", "steps", "warning"}
-    for method in ("direct", "vpn", "tor", "ram"):
+    for method in ("direct", "vpn", "tor", "local", "ram"):
         info = chameleon_gui.METHOD_INFO[method][lang]
         assert required_fields <= set(info.keys()), f"{method}/{lang}: eksik alan"
 

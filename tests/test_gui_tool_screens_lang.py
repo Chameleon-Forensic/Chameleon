@@ -100,6 +100,66 @@ def test_acquisition_type_switches_visible_card(qapp):
 
 
 @pytest.mark.parametrize("lang", LANGUAGES)
+def test_local_mode_screen_builds_in_every_language(qapp, lang):
+    """Yerel mod (SSH yok): SSH kartları gizli, OS Windows'a sabit, bağlantı
+    hazır (LocalConnector), başlık seçili dilde."""
+    from strings import t
+    widget = gui_v2.ForensicWidget(initial_connection_method="local", lang=lang)
+    qapp.processEvents()
+    try:
+        assert isinstance(widget.ssh, gui_v2.LocalConnector)
+        assert widget.radio_os_windows.isChecked()
+        assert widget.conn_method_value == "local"
+        assert widget.entry_logical_root.text() == "C:\\"
+        assert all(card.isHidden() for card in widget._ssh_only_cards)
+        assert t("tool_local_title", lang) in _all_texts(widget)
+        assert t("tool_local_info", lang) in _all_texts(widget)
+    finally:
+        widget.deleteLater()
+        qapp.processEvents()
+
+
+def test_local_mode_refuses_output_on_source_or_without_admin(qapp, monkeypatch):
+    """Kaynak diske yazma ve yetkisiz ham disk okuma İMAJ BAŞLAMADAN reddedilir."""
+    from strings import t
+    widget = gui_v2.ForensicWidget(initial_connection_method="local", lang="en")
+    qapp.processEvents()
+    hatalar = []
+    monkeypatch.setattr(widget, "_show_error", hatalar.append)
+    try:
+        # yönetici değil -> disk modu reddedilir
+        monkeypatch.setattr(gui_v2, "is_admin", lambda: False)
+        assert widget._local_precheck(disk_number=1, out_path="D:\\x") is False
+        assert hatalar[-1] == t("tool_local_err_admin", "en")
+
+        # yönetici ama çıktı kaynakla aynı diskte -> reddedilir
+        monkeypatch.setattr(gui_v2, "is_admin", lambda: True)
+        monkeypatch.setattr(gui_v2, "check_output_not_on_source", lambda ssh, disk, out: "output_on_source")
+        assert widget._local_precheck(disk_number=1, out_path="C:\\x") is False
+        assert hatalar[-1] == t("tool_local_err_output_on_source", "en")
+
+        # her şey yolunda, kaynak sistem diski DEĞİL -> geçer
+        monkeypatch.setattr(gui_v2, "check_output_not_on_source", lambda ssh, disk, out: None)
+        monkeypatch.setattr(gui_v2, "system_disk_number", lambda ssh: 0)
+        assert widget._local_precheck(disk_number=1, out_path="D:\\x") is True
+
+        # sistem diski + Offline -> reddedilir (salt-okunur yapılamaz)
+        widget.radio_offline.setChecked(True)
+        assert widget._local_precheck(disk_number=0, out_path="D:\\x") is False
+        assert hatalar[-1] == t("tool_local_err_system_offline", "en")
+
+        # sistem diski + Live -> kullanıcıya sorulur; hayır derse iptal, evet derse geçer
+        widget.radio_live.setChecked(True)
+        monkeypatch.setattr(widget, "_show_yesno_dialog", lambda title, msg: False)
+        assert widget._local_precheck(disk_number=0, out_path="D:\\x") is False
+        monkeypatch.setattr(widget, "_show_yesno_dialog", lambda title, msg: True)
+        assert widget._local_precheck(disk_number=0, out_path="D:\\x") is True
+    finally:
+        widget.deleteLater()
+        qapp.processEvents()
+
+
+@pytest.mark.parametrize("lang", LANGUAGES)
 def test_ram_engine_widget_builds_in_every_language(qapp, lang):
     widget = ram_gui.RamEngineWidget(lang=lang)
     qapp.processEvents()

@@ -62,6 +62,10 @@ EVENT_IMAGE_COMPRESSED = "IMAGE_COMPRESSED"
 # NEDEN olmadigi delil zincirinde acikca gorunsun diye tek bir ozet olarak
 # kaydedilir; tam liste manifest_files.json'daki "excluded" alanindadir.
 EVENT_LOGICAL_EXCLUSIONS = "LOGICAL_EXCLUSIONS"
+# Yerel mod (SSH yok): arac incelenen bilgisayarin KENDISINDE calisiyor.
+# Kaynagin canli sistem diski olup olmadigi ve ciktinin nereye yazildigi
+# delil zincirinde acikca gorunsun diye alma baslarken bir kez kaydedilir.
+EVENT_LOCAL_MODE = "LOCAL_MODE"
 
 # Bu çalıştırmaya ait log dosyasının yolu (ilk log_event çağrısında oluşur)
 _current_log_file = None

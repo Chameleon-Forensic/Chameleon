@@ -867,6 +867,201 @@ METHOD_INFO = {
             "warning": None,
         },
     },
+    # "Bu bilgisayar" -- SSH yok, arac incelenen makinede calisir (bkz.
+    # engines/ssh_engine/local_collector/local_connector.py).
+    "local": {
+        "tr": {
+            "title": "Bu Bilgisayarın İmajını Al (Yerel)",
+            "icon": "hard-drive",
+            "short": "Aracı incelenen bilgisayarda (USB'den) çalıştırıp diskini harici bir diske alır -- ağ gerekmez",
+            "what": (
+                "Chameleon'u doğrudan incelenen bilgisayarda çalıştırır: SSH ya da ağ olmadan, "
+                "bu bilgisayarın diskini (ya da bir bölümünün dosyalarını) takılı harici bir "
+                "diske imaj olarak alır. Hash, rapor, sıkıştırma ve parçalama SSH modundakiyle aynıdır."
+            ),
+            "when": [
+                "İncelenen bilgisayar elinizde, açık ve önünüzde -- ağ bağlantısı kurulamıyor ya da gerekmiyor",
+                "Aracı USB'den çalıştırıp çıktıyı harici bir diske yazmak istiyorsanız",
+            ],
+            "requires": [
+                "Windows işletim sistemi",
+                "Yönetici olarak çalıştırma (ham disk okumak için)",
+                "İncelenen diskten FARKLI bir çıktı diski (ör. harici disk) -- program aynı diske yazmayı reddeder",
+            ],
+            "steps": [
+                "\"Başlat\"a basıp (isteğe bağlı) vaka bilgilerini girin",
+                "Açılan listeden imajı alınacak diskin numarasını not edin (sistem diski işaretlidir)",
+                "\"Ne Alınacak?\" bölümünden Tam Disk, Dosya/Klasör ya da Mantıksal İmaj'ı seçin",
+                "Çıktı yolunu harici diskte bir yere ayarlayın",
+                "\"İmaj Almayı Başlat\"a basın",
+            ],
+            "warning": (
+                "Çalışan sistemin kendi diski yazmaya karşı korunamaz: o disk CANLI alınır, alma "
+                "sırasında değişebilir ve rapora açıkça yazılır. Gerçek yazma koruması için diski "
+                "çıkarıp donanımsal write-blocker ile başka bir bilgisayardan alın."
+            ),
+        },
+        "en": {
+            "title": "Image This Computer (Local)",
+            "icon": "hard-drive",
+            "short": "Run the tool on the examined computer (from USB) and image its disk to an external drive -- no network needed",
+            "what": (
+                "Runs Chameleon directly on the examined computer: with no SSH or network, it images "
+                "this computer's disk (or the files of one partition) to an attached external drive. "
+                "Hashing, reporting, compression and splitting are the same as in SSH mode."
+            ),
+            "when": [
+                "The examined computer is in front of you and powered on -- a network connection can't be made or isn't needed",
+                "You want to run the tool from USB and write the output to an external drive",
+            ],
+            "requires": [
+                "Windows operating system",
+                "Running as Administrator (to read the raw disk)",
+                "An output disk DIFFERENT from the examined one (e.g. an external drive) -- the program refuses to write to the same disk",
+            ],
+            "steps": [
+                "Click \"Start\" and (optionally) enter the case information",
+                "Note the number of the disk to image from the list that appears (the system disk is marked)",
+                "Choose Full Disk, File/Folder or Logical Image under \"What to acquire?\"",
+                "Set the output path to somewhere on the external drive",
+                "Click \"Start Acquisition\"",
+            ],
+            "warning": (
+                "The running system's own disk cannot be protected against writes: it is acquired LIVE, "
+                "may change during acquisition, and the report says so explicitly. For real write "
+                "protection, remove the disk and acquire it from another computer through a hardware write-blocker."
+            ),
+        },
+        "es": {
+            "title": "Obtener Imagen de Este Equipo (Local)",
+            "icon": "hard-drive",
+            "short": "Ejecute la herramienta en el equipo examinado (desde USB) y copie su disco a una unidad externa -- sin red",
+            "what": (
+                "Ejecuta Chameleon directamente en el equipo examinado: sin SSH ni red, copia el disco "
+                "de este equipo (o los archivos de una partición) a una unidad externa conectada. "
+                "El hash, el informe, la compresión y la división son los mismos que en el modo SSH."
+            ),
+            "when": [
+                "El equipo examinado está frente a usted y encendido -- no se puede o no hace falta una conexión de red",
+                "Quiere ejecutar la herramienta desde USB y escribir la salida en una unidad externa",
+            ],
+            "requires": [
+                "Sistema operativo Windows",
+                "Ejecutar como Administrador (para leer el disco en bruto)",
+                "Un disco de salida DISTINTO al examinado (p. ej. una unidad externa) -- el programa se niega a escribir en el mismo disco",
+            ],
+            "steps": [
+                "Haga clic en \"Iniciar\" y (opcional) introduzca la información del caso",
+                "Anote el número del disco a copiar en la lista que aparece (el disco del sistema está marcado)",
+                "Elija Disco Completo, Archivo/Carpeta o Imagen Lógica en \"¿Qué adquirir?\"",
+                "Ponga la ruta de salida en algún lugar de la unidad externa",
+                "Haga clic en \"Iniciar adquisición\"",
+            ],
+            "warning": (
+                "El disco del propio sistema en ejecución no se puede proteger contra escritura: se "
+                "adquiere EN VIVO, puede cambiar durante la adquisición y el informe lo indica "
+                "expresamente. Para una protección real, retire el disco y adquiéralo desde otro "
+                "equipo con un bloqueador de escritura por hardware."
+            ),
+        },
+        "de": {
+            "title": "Abbild dieses Computers erstellen (Lokal)",
+            "icon": "hard-drive",
+            "short": "Tool auf dem untersuchten Computer (von USB) starten und dessen Datenträger auf ein externes Laufwerk abbilden -- kein Netzwerk nötig",
+            "what": (
+                "Führt Chameleon direkt auf dem untersuchten Computer aus: ohne SSH oder Netzwerk wird "
+                "der Datenträger dieses Computers (oder die Dateien einer Partition) auf ein "
+                "angeschlossenes externes Laufwerk abgebildet. Hashing, Bericht, Komprimierung und "
+                "Aufteilung entsprechen dem SSH-Modus."
+            ),
+            "when": [
+                "Der untersuchte Computer steht vor Ihnen und ist eingeschaltet -- eine Netzwerkverbindung ist nicht möglich oder nicht nötig",
+                "Sie möchten das Tool von USB starten und die Ausgabe auf ein externes Laufwerk schreiben",
+            ],
+            "requires": [
+                "Betriebssystem Windows",
+                "Ausführung als Administrator (zum Lesen des Rohdatenträgers)",
+                "Ein Ausgabe-Datenträger, der sich vom untersuchten UNTERSCHEIDET (z. B. eine externe Festplatte) -- das Programm weigert sich, auf denselben Datenträger zu schreiben",
+            ],
+            "steps": [
+                "Klicken Sie auf \"Starten\" und geben Sie (optional) die Fallinformationen ein",
+                "Notieren Sie in der angezeigten Liste die Nummer des abzubildenden Datenträgers (der Systemdatenträger ist markiert)",
+                "Wählen Sie unter \"Was erfassen?\" Gesamte Festplatte, Datei/Ordner oder Logisches Abbild",
+                "Legen Sie den Ausgabepfad auf dem externen Laufwerk fest",
+                "Klicken Sie auf \"Erfassung starten\"",
+            ],
+            "warning": (
+                "Der Datenträger des laufenden Systems selbst lässt sich nicht gegen Schreibzugriffe "
+                "schützen: Er wird LIVE erfasst, kann sich während der Erfassung ändern, und der "
+                "Bericht vermerkt das ausdrücklich. Für echten Schreibschutz bauen Sie den "
+                "Datenträger aus und erfassen ihn an einem anderen Computer über einen Hardware-Write-Blocker."
+            ),
+        },
+        "pt": {
+            "title": "Obter Imagem Deste Computador (Local)",
+            "icon": "hard-drive",
+            "short": "Execute a ferramenta no computador examinado (via USB) e copie o disco para um disco externo -- sem rede",
+            "what": (
+                "Executa o Chameleon diretamente no computador examinado: sem SSH nem rede, copia o "
+                "disco deste computador (ou os arquivos de uma partição) para um disco externo "
+                "conectado. Hash, relatório, compressão e divisão são os mesmos do modo SSH."
+            ),
+            "when": [
+                "O computador examinado está à sua frente e ligado -- não é possível ou necessário uma conexão de rede",
+                "Você quer executar a ferramenta a partir de USB e gravar a saída em um disco externo",
+            ],
+            "requires": [
+                "Sistema operacional Windows",
+                "Execução como Administrador (para ler o disco bruto)",
+                "Um disco de saída DIFERENTE do examinado (ex.: um disco externo) -- o programa se recusa a gravar no mesmo disco",
+            ],
+            "steps": [
+                "Clique em \"Iniciar\" e (opcional) insira as informações do caso",
+                "Anote o número do disco a copiar na lista exibida (o disco do sistema está marcado)",
+                "Escolha Disco Completo, Arquivo/Pasta ou Imagem Lógica em \"O que adquirir?\"",
+                "Defina o caminho de saída em algum lugar do disco externo",
+                "Clique em \"Iniciar Aquisição\"",
+            ],
+            "warning": (
+                "O disco do próprio sistema em execução não pode ser protegido contra gravação: ele é "
+                "adquirido AO VIVO, pode mudar durante a aquisição e o relatório informa isso "
+                "explicitamente. Para proteção real, remova o disco e adquira-o em outro computador "
+                "com um bloqueador de gravação em hardware."
+            ),
+        },
+        "fr": {
+            "title": "Acquérir l'Image de Cet Ordinateur (Local)",
+            "icon": "hard-drive",
+            "short": "Lancez l'outil sur l'ordinateur examiné (depuis USB) et copiez son disque vers un disque externe -- aucun réseau requis",
+            "what": (
+                "Exécute Chameleon directement sur l'ordinateur examiné : sans SSH ni réseau, copie le "
+                "disque de cet ordinateur (ou les fichiers d'une partition) vers un disque externe "
+                "connecté. Le hash, le rapport, la compression et le découpage sont identiques au mode SSH."
+            ),
+            "when": [
+                "L'ordinateur examiné est devant vous et allumé -- une connexion réseau est impossible ou inutile",
+                "Vous voulez lancer l'outil depuis USB et écrire la sortie sur un disque externe",
+            ],
+            "requires": [
+                "Système d'exploitation Windows",
+                "Exécution en tant qu'Administrateur (pour lire le disque brut)",
+                "Un disque de sortie DIFFÉRENT de celui examiné (p. ex. un disque externe) -- le programme refuse d'écrire sur le même disque",
+            ],
+            "steps": [
+                "Cliquez sur \"Démarrer\" et (facultatif) saisissez les informations du dossier",
+                "Notez le numéro du disque à copier dans la liste affichée (le disque système est signalé)",
+                "Choisissez Disque Complet, Fichier/Dossier ou Image Logique sous \"Quoi acquérir ?\"",
+                "Réglez le chemin de sortie quelque part sur le disque externe",
+                "Cliquez sur \"Démarrer l'acquisition\"",
+            ],
+            "warning": (
+                "Le disque du système en cours d'exécution ne peut pas être protégé en écriture : il "
+                "est acquis EN DIRECT, peut changer pendant l'acquisition, et le rapport l'indique "
+                "explicitement. Pour une vraie protection en écriture, retirez le disque et acquérez-le "
+                "depuis un autre ordinateur via un bloqueur d'écriture matériel."
+            ),
+        },
+    },
 }
 
 # Bir yontem tanitim sayfasindaki kavramsal olarak agir bir konu icin
@@ -1446,6 +1641,7 @@ class ChameleonWindow(QMainWindow):
             ("direct", "link", t("nav_direct", lang), self._show_direct_detail),
             ("vpn", "shield", t("nav_vpn", lang), self._show_vpn_detail),
             ("tor", "shield-alert", t("nav_tor", lang), self._show_tor_detail),
+            ("local", "hard-drive", t("nav_local", lang), self._show_local_detail),
             ("ram", "cpu", t("nav_ram", lang), self._show_ram_detail),
             ("history", "clock", t("nav_history", lang), self._show_case_history),
             ("incomplete", "alert-triangle", t("nav_incomplete", lang), self._show_incomplete_operations),
@@ -1649,7 +1845,8 @@ class ChameleonWindow(QMainWindow):
 
         for key, handler in [
             ("direct", self._show_direct_detail), ("vpn", self._show_vpn_detail),
-            ("tor", self._show_tor_detail), ("ram", self._show_ram_detail),
+            ("tor", self._show_tor_detail), ("local", self._show_local_detail),
+            ("ram", self._show_ram_detail),
         ]:
             info = METHOD_INFO[key][self.lang]
             body.addWidget(self._home_card(info, handler))
@@ -1819,6 +2016,11 @@ class ChameleonWindow(QMainWindow):
         if self._resume_active_tool("ssh", "tor"):
             return
         self._show_method_detail("tor", lambda: self._show_case_info(lambda case: self._open_ssh_engine("tor", case)))
+
+    def _show_local_detail(self):
+        if self._resume_active_tool("ssh", "local"):
+            return
+        self._show_method_detail("local", lambda: self._show_case_info(lambda case: self._open_ssh_engine("local", case)))
 
     def _show_ram_detail(self):
         if self._resume_active_tool("ram"):

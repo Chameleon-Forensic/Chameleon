@@ -23,6 +23,7 @@ docs/hatalar_ve_sonuclar.md.)
 import datetime
 import json
 import os
+import platform
 import re
 import subprocess
 import sys
@@ -126,6 +127,10 @@ try:
         get_disk_description_windows,
     )
     from hash_verifier import verify_file, HashMismatchError, HashError, hash_file_multi, hash_files_multi
+    from local_connector import (
+        LocalConnector, is_admin, system_disk_number,
+        check_output_not_on_source, check_root_output_separate,
+    )
     import chain_of_custody as coc
     import tor_client
     PARAMIKO_OK = True
@@ -1122,6 +1127,9 @@ class ForensicWidget(QWidget):
         self._display_timezone = display_timezone
         self._initial_connection_method = initial_connection_method
         self._method_locked = initial_connection_method is not None
+        # "Bu bilgisayar" modu: SSH yok, arac incelenen makinenin kendisinde
+        # calisir (bkz. local_connector.py).
+        self._local_mode = initial_connection_method == "local"
 
         self.ssh = None
         self.tor_client_handle = None
@@ -1157,7 +1165,7 @@ class ForensicWidget(QWidget):
             back_btn = widgets.SecondaryButton(t("btn_back", self.lang))
             back_btn.clicked.connect(self.on_back)
             header.addWidget(back_btn)
-        title = QLabel(t("tool_ssh_title", self.lang))
+        title = QLabel(t("tool_local_title" if self._local_mode else "tool_ssh_title", self.lang))
         title.setStyleSheet(f"color:{ui.TEXT_MAIN}; font-family:'{ui.FONT_UI}'; font-size:{ui.SIZE_TITLE}px; font-weight:600;")
         header.addWidget(title)
         header.addStretch()
@@ -1230,6 +1238,7 @@ class ForensicWidget(QWidget):
         yontem.body.addWidget(self.vpn_info)
         yontem.body.addWidget(self.tor_info)
         body.addWidget(yontem)
+        self._ssh_only_cards = [yontem]
 
         # === SSH Baglanti Bilgileri ===
         conn = widgets.Card(t("tool_ssh_conn_card", self.lang))
@@ -1309,9 +1318,11 @@ class ForensicWidget(QWidget):
         connect_row.addStretch()
         conn.body.addLayout(connect_row)
         body.addWidget(conn)
+        self._ssh_only_cards.append(conn)
 
         # === Hedef Isletim Sistemi ===
         os_card = widgets.Card(t("tool_target_os_card", self.lang))
+        self._ssh_only_cards.append(os_card)
         os_row = QHBoxLayout()
         self.os_group = QButtonGroup(self)
         self.radio_os_linux = widgets.RadioButton(t("tool_os_linux", self.lang))
@@ -1517,6 +1528,78 @@ class ForensicWidget(QWidget):
         self._on_target_os_change()
         self._on_acq_type_change()
         self._on_conn_method_change()
+        if self._local_mode:
+            self._setup_local_mode(body)
+
+    def _setup_local_mode(self, body):
+        """Yerel mod: SSH'e ozgu kartlar (yontem/baglanti/hedef OS) gizlenir, OS
+        Windows'a sabitlenir, baglanti hazir sayilir. Ekranin geri kalani
+        (ne alinacak, cikti, log, rapor) SSH moduyla AYNI -- ayni kod calisir."""
+        for card in self._ssh_only_cards:
+            card.hide()
+        self.radio_os_windows.setChecked(True)
+        self.conn_method_value = "local"
+        # Rapordaki "hedef" alani bu bilgisayarin adi olur.
+        self.entry_host.setText(platform.node())
+
+        info = widgets.Card(t("tool_local_info_card", self.lang))
+        lbl = QLabel(t("tool_local_info", self.lang))
+        lbl.setWordWrap(True)
+        lbl.setStyleSheet(f"color:{ui.TEXT_MAIN}; font-family:'{ui.FONT_UI}'; font-size:{ui.SIZE_HELPER}px;")
+        info.body.addWidget(lbl)
+        # Vaka Bilgileri karti (varsa) en ustte kalsin, bilgi karti hemen altina
+        body.insertWidget(1, info)
+
+        self.ssh = LocalConnector()
+        self._set_conn_indicator(True)
+        self._log(f"[i] Yerel mod: bu bilgisayar ({platform.node()}) incelenecek, SSH kullanılmıyor.", "info")
+        if not is_admin():
+            self._log(f"[UYARI] {t('tool_local_err_admin', self.lang)}", "warn")
+        self.disks_raw = self.ssh.list_disks()
+        self._log("--- Mevcut Diskler ---", "info")
+        self._log(self.disks_raw or "(disk listelenemedi)", "plain")
+        self._set_status(t("tool_status_connected_disks", self.lang))
+
+    def _local_precheck(self, disk_number=None, root_path=None, out_path=None):
+        """Yerel modda kaynaga yazmayi/riskli kosulu onleyen kontroller. Sorun
+        varsa kullaniciya hata gosterip False doner. Disk modu icin disk_number,
+        mantiksal/dosya modu icin root_path verilir."""
+        if disk_number is not None and not is_admin():
+            kod = "admin"
+        elif disk_number is not None:
+            kod = check_output_not_on_source(self.ssh, disk_number, out_path)
+        else:
+            kod = check_root_output_separate(self.ssh, root_path, out_path)
+        hata_anahtari = {
+            "admin": "tool_local_err_admin",
+            "output_on_source": "tool_local_err_output_on_source",
+            "output_disk_unknown": "tool_local_err_output_unknown",
+        }.get(kod)
+        if hata_anahtari:
+            self._show_error(t(hata_anahtari, self.lang))
+            return False
+
+        if disk_number is not None:
+            sistem_mi = disk_number == system_disk_number(self.ssh)
+            if sistem_mi:
+                if self.radio_offline.isChecked():
+                    self._show_error(t("tool_local_err_system_offline", self.lang))
+                    return False
+                if not self._show_yesno_dialog(
+                    t("tool_local_system_live_title", self.lang), t("tool_local_system_live_msg", self.lang),
+                ):
+                    return False
+            coc.log_event(
+                coc.EVENT_LOCAL_MODE,
+                f"Yerel imaj: kaynak PhysicalDrive{disk_number}"
+                f"{' (CALISAN SISTEM DISKI, canli)' if sistem_mi else ''}, cikti: {out_path}, bilgisayar: {platform.node()}",
+            )
+        else:
+            coc.log_event(
+                coc.EVENT_LOCAL_MODE,
+                f"Yerel imaj: kaynak yol {root_path}, cikti: {out_path}, bilgisayar: {platform.node()}",
+            )
+        return True
 
     def _labeled_row(self, body_layout, label_text, initial_value):
         row = QHBoxLayout()
@@ -1974,6 +2057,8 @@ class ForensicWidget(QWidget):
         if not out_path:
             self._show_error(t("tool_err_output_path_required", self.lang))
             return
+        if self._local_mode and not self._local_precheck(disk_number=disk_number, out_path=out_path):
+            return
 
         compress = mode == "offline" and self.check_compress.isChecked()
         ctx = self._new_report_ctx()
@@ -2019,6 +2104,8 @@ class ForensicWidget(QWidget):
             return
         if not out_dir:
             self._show_error(t("tool_err_output_folder_required", self.lang))
+            return
+        if self._local_mode and not self._local_precheck(root_path=remote_path, out_path=out_dir):
             return
 
         ctx = self._new_report_ctx()

@@ -137,6 +137,14 @@ def _block_read_script(disk_number, offset, length):
 
 def get_remote_block_hash_windows(ssh, disk_number, block_no, block_size_mb):
     """Blogu SUNUCUDA hashler, veri gondermez -- sadece SHA-256 hex doner."""
+    if getattr(ssh, "is_local", False):
+        # Yerel mod: PowerShell yerine dogrudan okuma (bkz. local_connector).
+        # Ayni blok acquire_raw_block_windows'ta BAGIMSIZ olarak bir kez daha
+        # okunup karsilastirilir -- kararsiz okumayi (bozuk USB koprusu vb.)
+        # yakalayan uzak moddaki kontrolun aynisi.
+        from local_connector import read_local_block
+        veri = read_local_block(ssh, disk_number, block_no, block_size_mb)
+        return hashlib.sha256(veri).hexdigest() if veri is not None else None
     offset = block_no * block_size_mb * 1024 * 1024
     length = block_size_mb * 1024 * 1024
     ps = (
@@ -152,6 +160,9 @@ def get_remote_block_hash_windows(ssh, disk_number, block_no, block_size_mb):
 
 def acquire_raw_block_windows(ssh, disk_number, block_no, block_size_mb):
     """Blogu Base64 olarak ceker (SSH metin kanalindan guvenle gecsin diye)."""
+    if getattr(ssh, "is_local", False):
+        from local_connector import read_local_block
+        return read_local_block(ssh, disk_number, block_no, block_size_mb)
     offset = block_no * block_size_mb * 1024 * 1024
     length = block_size_mb * 1024 * 1024
     ps = _block_read_script(disk_number, offset, length) + "[Convert]::ToBase64String($buf)"
