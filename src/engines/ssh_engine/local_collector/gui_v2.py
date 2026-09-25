@@ -33,7 +33,7 @@ from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtWidgets import (
     QButtonGroup, QComboBox, QCompleter, QDialog, QFileDialog, QHBoxLayout, QLabel,
     QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QPushButton, QTextEdit,
-    QVBoxLayout, QWidget,
+    QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
 )
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -94,6 +94,28 @@ def _save_recent_host(host, port, username):
             json.dump(entries, f, indent=2, ensure_ascii=False)
     except OSError:
         pass
+
+
+def build_path_tree(paths):
+    """Yol listesinden ('/' ve '\\' karisik olabilir -- hedef Linux ya da
+    Windows olabilir) ic ice bir sozluk agaci kurar. Klasor dugumleri kendi
+    altindaki ogelerin sozlugu (dict), dosya (yaprak) dugumleri ise KENDI
+    ORIJINAL TAM YOL STRING'INI deger olarak tasir -- boylece bir yaprak,
+    ayirici normalize edip yeniden birlestirmeye gerek kalmadan dogrudan
+    manifest'teki ilgili kayda (ör. local_path) eslenebilir (bkz.
+    _show_tree_dialog). Sadece GORUNTULEME icin, alma mantigina dokunmuyor."""
+    kok = {}
+    for yol in paths:
+        parcalar = [p for p in re.split(r"[\\/]+", yol) if p]
+        if not parcalar:
+            continue
+        dugum = kok
+        for parca in parcalar[:-1]:
+            dugum = dugum.setdefault(parca, {})
+        dugum[parcalar[-1]] = yol
+    return kok
+
+
 from ui_kit import theme_qt as ui, fonts, icons, widgets  # noqa: E402
 from help_content import get_topic  # noqa: E402
 from strings import t  # noqa: E402
@@ -1544,6 +1566,13 @@ class ForensicWidget(QWidget):
         # Rapordaki "hedef" alani bu bilgisayarin adi olur.
         self.entry_host.setText(platform.node())
 
+        # Blok boyutu aciklamalari ("yavas/kararsiz baglanti" vb.) SSH
+        # uzerinden ag hizina gore secim icin anlamli -- yerel modda ag hic
+        # yok, sadece duz MB degeri sorulmasi yeterli (kullanici bildirdi).
+        self.combo_block_size.clear()
+        self.combo_block_size.addItems(["4 MB", "16 MB", "32 MB", "64 MB"])
+        self.combo_block_size.setCurrentIndex(3)  # 64 MB -- yerel okumada ag hizi kisiti yok
+
         info = widgets.Card(t("tool_local_info_card", self.lang))
         lbl = QLabel(t("tool_local_info", self.lang))
         lbl.setWordWrap(True)
@@ -2314,11 +2343,104 @@ class ForensicWidget(QWidget):
         open_btn = widgets.PrimaryButton(t("btn_open_report_html", self.lang))
         open_btn.clicked.connect(_open_html)
         btns.addWidget(open_btn)
+
+        # Agac gorunumu SADECE Dosya/Klasor ve Mantiksal Imaj icin anlamli --
+        # onlarda dosyalar tek tek, orijinal yapisiyla diske yaziliyor. Tam
+        # Disk (ham blok imaji) bir dosya sistemi degil, agac gosterecek bir
+        # sey yok (mount/ayristirma gerektirir, kapsam disi).
+        method = d["tool"]["method"]
+        if method in ("file", "logical"):
+            manifest_yolu = os.path.join(d["result"]["output_path"] or "", "manifest_files.json")
+            if os.path.isfile(manifest_yolu):
+                tree_btn = widgets.SecondaryButton(t("btn_view_tree", self.lang))
+                tree_btn.clicked.connect(lambda: self._show_tree_dialog(manifest_yolu))
+                btns.addWidget(tree_btn)
+
         btns.addStretch()
         close_btn = widgets.SecondaryButton(t("btn_close", self.lang))
         close_btn.clicked.connect(dialog.close)
         btns.addWidget(close_btn)
         layout.addLayout(btns)
+        dialog.exec()
+
+    def _show_tree_dialog(self, manifest_yolu):
+        """Alinan dosya/klasor agacini gosterir -- manifest_files.json'daki
+        HEDEFTEKI orijinal yollardan kurulur (build_path_tree), cift
+        tiklamada karsilik gelen YEREL dosya acilir. Hoca istegi (bkz.
+        docs/roadmap.md)."""
+        try:
+            with open(manifest_yolu, "r", encoding="utf-8") as f:
+                manifest = json.load(f)
+        except (OSError, json.JSONDecodeError) as exc:
+            self._show_error(t("tool_tree_load_error", self.lang, exc=exc))
+            return
+
+        acquired = manifest.get("acquired", [])
+        yollar = [a["remote_path"] for a in acquired]
+        yerel_karsilik = {a["remote_path"]: a["local_path"] for a in acquired}
+        agac = build_path_tree(yollar)
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle(t("tool_tree_dialog_title", self.lang))
+        dialog.resize(520, 480)
+        dialog.setStyleSheet(f"background-color:{ui.BG_DARKEST};")
+        layout = QVBoxLayout(dialog)
+
+        tree = QTreeWidget()
+        tree.setHeaderHidden(True)
+        tree.setStyleSheet(f"""
+            QTreeWidget {{ background-color:{ui.BG_LAYER2}; color:{ui.TEXT_MAIN};
+                border:1px solid {ui.BORDER}; border-radius:{ui.RADIUS}px; }}
+        """)
+
+        def _doldur(ebeveyn, dugum):
+            # klasorler once, sonra dosyalar -- ikisi de kendi icinde alfabetik
+            # (list_remote_directory'deki sunum kuraliyla AYNI).
+            for isim, deger in sorted(dugum.items(), key=lambda kv: (isinstance(kv[1], str), kv[0].lower())):
+                oge = QTreeWidgetItem(ebeveyn, [isim])
+                if isinstance(deger, dict):
+                    oge.setIcon(0, icons.icon("folder", color=ui.ACCENT_TEXT, size=16))
+                    _doldur(oge, deger)
+                else:
+                    oge.setIcon(0, icons.icon("file-text", size=16))
+                    oge.setData(0, Qt.ItemDataRole.UserRole, yerel_karsilik.get(deger))
+
+        # remote_root'un kendisi de paths'lerin BASINDA aynen geciyor (ör.
+        # remote_root="/data", yollar "/data/sub/..." gibi) -- kok etiketi
+        # olarak ayrica gosterildigi icin, agacta o segmentleri TEKRAR
+        # dugum olarak eklemeyip dogrudan ALTINDAKI alt agaca iniyoruz;
+        # yoksa "/data" hem kok etiketinde hem "data" diye bir alt dugumde
+        # ikilenmis olurdu.
+        remote_root = manifest.get("remote_root", "/")
+        alt_agac = agac
+        for parca in re.split(r"[\\/]+", remote_root):
+            if not parca:
+                continue
+            if isinstance(alt_agac, dict) and isinstance(alt_agac.get(parca), dict):
+                alt_agac = alt_agac[parca]
+            else:
+                alt_agac = agac  # beklenmedik durum -- tam agaci goster, veri kaybetme
+                break
+
+        kok_oge = QTreeWidgetItem(tree, [remote_root])
+        kok_oge.setIcon(0, icons.icon("hard-drive", color=ui.ACCENT_TEXT, size=16))
+        _doldur(kok_oge, alt_agac)
+        kok_oge.setExpanded(True)
+
+        def _cift_tikla(oge, _sutun):
+            yerel = oge.data(0, Qt.ItemDataRole.UserRole)
+            if yerel and os.path.exists(yerel):
+                try:
+                    os.startfile(yerel)
+                except OSError as exc:
+                    self._log(f"[UYARI] Dosya açılamadı: {exc}", "warn")
+
+        tree.itemDoubleClicked.connect(_cift_tikla)
+        layout.addWidget(tree)
+
+        close_btn = widgets.SecondaryButton(t("btn_close", self.lang))
+        close_btn.clicked.connect(dialog.close)
+        layout.addWidget(close_btn)
         dialog.exec()
 
 
