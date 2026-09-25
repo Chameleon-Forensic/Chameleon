@@ -2598,8 +2598,12 @@ class ChameleonWindow(QMainWindow):
                 total = veri.get("total_files", 0)
                 baslik = veri.get("remote_root") or "—"
                 card = widgets.Card(baslik)
+                # bkz. docs/roadmap.md madde 0.5 bilinen sinir -- mantiksal
+                # imaj manifestleri (mode="logical") daha once dosya/klasor
+                # ile ayni ("SSH Dosya/Klasor") etiketiyle gorunuyordu.
+                tur_anahtari = "type_ssh_logical" if veri.get("mode") == "logical" else "type_ssh_file_folder"
                 satirlar = [
-                    (t("label_type", lang), t("type_ssh_file_folder", lang)),
+                    (t("label_type", lang), t(tur_anahtari, lang)),
                     (t("label_target", lang), veri.get("host") or "—"),
                     (t("label_progress", lang), t("progress_files", lang, completed=completed, total=total)),
                     (t("label_started", lang), veri.get("started_at_utc") or "—"),

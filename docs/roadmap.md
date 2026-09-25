@@ -121,6 +121,8 @@
 
 - **Alma sonrası "Ağaç Yapısını Görüntüle" butonu** (hoca isteği) — Dosya/Klasör ve Mantıksal İmaj modlarında, imaj bitince çıkan özet penceresine yeni bir buton eklendi; `manifest_files.json`'daki hedefteki (uzak) yol listesinden bir `QTreeWidget` ağacı kuruyor (`build_path_tree` — hem `/` hem `\` ayırıcılı yolları destekliyor, saf/testlenebilir bir fonksiyon), klasörler önce sonra dosyalar alfabetik sıralanıyor (mevcut "Gözat" sunumuyla aynı kural). Bir dosyaya çift tıklanınca karşılık gelen YEREL (diske yazılmış) dosya açılıyor. **Tam Disk** (ham blok imajı) için buton hiç görünmüyor — o bir dosya sistemi değil, ağaç göstermek için önce mount/ayrıştırma gerekir, bu kapsam dışı bırakıldı. Manifest diskte yoksa (taşınmış/silinmiş) buton yine gizli kalıyor. `tests/test_tree_view.py`: 7 test (ağaç kurma, karışık ayırıcı, bozuk manifest'te çökmeden hata gösterme, butonun sadece doğru modlarda çıkması). Toplam 140 test geçti.
 
+- **"Yarım Kalanlar" sayfası artık mantıksal imaj manifestlerini ayrı etiketliyor** — madde 0.5'teki bilinen sınır giderildi: `manifest_tree_*.json`'daki `mode` alanına bakılıp "SSH Dosya/Klasör" yerine "SSH Mantıksal İmaj" gösteriliyor (6 dilde yeni anahtar). `tests/test_incomplete_ops_labels.py`: 1 test. Toplam 141 test geçti.
+
 ## Sırada
 
 0. **Yarım kalan vaka takibi + Mantıksal (sadece dolu alan) imaj** — kullanıcı isteğiyle planlandı, küçükten büyüğe sıralı, her adımdan sonra gerçek `.exe` testiyle doğrulanacak:
@@ -138,7 +140,7 @@
    - **Digital imza / paket imzalama** — v2.0'a bırakıldı, düşük öncelik (bkz. "Daha sonra" bölümü).
    - Şu an SADECE Windows hedef için (gömülü Tor binary'si Windows x86_64). Linux hedef desteği ayrı bir adım.
 2. **Linux hedefte RAM alma (askıda)** — LiME gibi bir çözüm gerekiyor ama hedefin çalışan kernel'ine özel derleme istiyor (Windows'taki gibi tek bir hazır dosya yetmiyor); kapsam daraltılmadan (örn. "sadece şu kernel sürümleri" gibi) ele alınması gerçekçi değil.
-3. **Full RAM modunun gerçek makinede test edilmesi** — `ram_gui.py`'deki full mod kodu yazıldı (ShellExecute+runas ile yükseltme, `.img.log` tail'leme) ama Yönetici + Secure Boot/test-signing gerektirdiği için ben test edemedim; kullanıcı kendi makinesinde denemeli.
+3. ~~**Full RAM modunun gerçek makinede test edilmesi**~~ **büyük ölçüde tamamlandı** — vendor aracının (RamImagerDriver.sys, imzasız) Full mod kodu artık arayüzden hiç erişilemiyor (kaldırıldı, bkz. "Yapıldı" listesindeki WinPmem maddesi), o yüzden bu madde artık konu dışı. WinPmem'in KENDİSİ gerçek makinede doğrulandı (26.37 GB, elle çalıştırılarak). **Kalan küçük parça:** Chameleon arayüzünden (UAC yükseltme + `cmd /c` log yönlendirme + gizli pencere) uçtan uca gerçek bir Full RAM alımı henüz teyit edilmedi — kullanıcı kendi makinesinde bir kez denemeli.
 
 ## Daha sonra, öncelik sırası netleşmedi
 
@@ -148,6 +150,6 @@
 - ~~Büyük imajları `.001`/`.002` gibi parçalara bölme~~ **tamamlandı**, bkz. "Yapıldı"
 - Aynı anda birden fazla istemciden imaj alma — **kullanıcı kararı: şimdilik yapılmıyor, isteğe bağlı olarak kalıyor; sahadan/kullanıcılardan böyle bir talep gelirse ele alınacak** (launcher'ın tek-aktif-araç-ekranı mimarisini sekmeli/çok pencereli yapıya çevirmeyi gerektirir, küçük bir iş değil)
 - `ram_engine`'in sürücüsünü gerçek bir sertifikayla imzalamak (şu an test-signing + reboot gerekiyor)
-- Ağ hızına göre değişen chunk boyutu
+- ~~Ağ hızına göre değişen chunk boyutu~~ **kullanıcı kararı: otomatik tespit yerine statik rehber** — "internet hızını test et" gibi bir otomasyon yerine, blok boyutu seçicisinin yanına önerilen boyutu bağlantı hızına göre açıklayan sabit etiketler eklendi (4/16/32/64 MB, 6 dilde) — daha basit, ekstra bir ölçüm adımı gerektirmiyor.
 - ~~Otomatik testler (pytest)~~ **tamamlandı**, bkz. "Yapıldı" — `ssh_engine`'deki mock SSH deseninden genişletildi
 - ~~Çoklu dil desteği — launcher'da başladı, motorların kendi arayüzüne henüz yayılmadı~~ **tamamlandı**, bkz. "Yapıldı" (`gui_v2.py`/`ram_gui.py` 6 dile taşındı — sadece worker thread'lerin işlem logu/delil zinciri kayıtları bilinçli olarak Türkçe kaldı)
