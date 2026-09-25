@@ -136,6 +136,11 @@ def test_local_mode_screen_builds_in_every_language(qapp, lang):
         assert all(card.isHidden() for card in widget._ssh_only_cards)
         assert t("tool_local_title", lang) in _all_texts(widget)
         assert t("tool_local_info", lang) in _all_texts(widget)
+        # Blok boyutu: yerel modda ag hizina gore aciklama YOK, sadece duz
+        # MB degeri -- ag yok ki hizina gore secim yapilsin (kullanici bildirdi).
+        combo_metinleri = [widget.combo_block_size.itemText(i) for i in range(widget.combo_block_size.count())]
+        assert combo_metinleri == ["4 MB", "16 MB", "32 MB", "64 MB"]
+        assert widget.combo_block_size.currentText() == "64 MB"
     finally:
         widget.deleteLater()
         qapp.processEvents()
