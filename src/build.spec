@@ -40,6 +40,7 @@ datas = [
     (os.path.join(ROOT, "engines", "ram_engine", "ram_gui.py"), "engines/ram_engine"),
     (os.path.join(ROOT, "engines", "ram_engine", "cli"), "engines/ram_engine/cli"),
     (os.path.join(ROOT, "engines", "ram_engine", "driver"), "engines/ram_engine/driver"),
+    (os.path.join(ROOT, "engines", "ram_engine", "winpmem"), "engines/ram_engine/winpmem"),
     (os.path.join(ROOT, "engines", "portable_kit", "tor_manager.py"), "engines/portable_kit"),
 ]
 # shared/forensic_report.py'nin export_pdf()'i (veri dosyasi olarak

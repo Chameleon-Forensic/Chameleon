@@ -30,6 +30,10 @@ from PySide6.QtWidgets import (
 RAM_ENGINE_DIR = os.path.dirname(os.path.abspath(__file__))
 CLI_PATH = os.path.join(RAM_ENGINE_DIR, "cli", "RamImagerCLI.exe")
 DRIVER_PATH = os.path.join(RAM_ENGINE_DIR, "driver", "RamImagerDriver.sys")
+# WinPmem (Velocidex, Apache 2.0, degistirilmemis resmi surum -- bkz.
+# winpmem/THIRD_PARTY_LICENSES.txt) -- RamImagerDriver.sys'in imzasiz oldugu
+# icin basarisiz oldugu (Error 577) durumlarda Full RAM icin alternatif motor.
+WINPMEM_PATH = os.path.join(RAM_ENGINE_DIR, "winpmem", "go-winpmem_amd64_1.0-rc2_signed.exe")
 
 _SHARED_DIR = os.path.join(RAM_ENGINE_DIR, "..", "..", "shared")
 if os.path.isdir(_SHARED_DIR):
@@ -81,6 +85,42 @@ def list_processes():
     return sorted(sonuc, key=lambda x: x[0].lower())
 
 
+def build_winpmem_elevate_params(args, log_path):
+    """
+    ShellExecuteW ile 'cmd.exe'yi 'runas' verbiyle yukseltmek icin parametre
+    metni. WinPmem, RamImagerCLI'nin aksine kendi log dosyasini yazmiyor ve
+    yukseltilmis surecin stdout'u ana surece aktarilamiyor (bkz. _run_full_mode
+    docstring'i) -- bu yuzden ciktiyi 'cmd /c' ile log_path'e yonlendiriyoruz.
+
+    cmd.exe'nin bilinen kurali: /c'den sonraki metnin ILK ve SON karakteri
+    tirnaksa bu DIS ciftini siler -- komut zaten kendi ic tirnaklarini
+    tasiyorsa (list2cmdline exe yolunu tirnaklar) bu, ic tirnaklardan birini
+    yanlislikla disari tasir ve yolu bozar. Duzeltme: butun metni bir kat
+    daha tirnak icine alip cmd'nin silecegi disari fazladan bir kat eklemek --
+    standart, belgelenmis is-around.
+
+    Sonunda basarili/basarisiz FARK ETMEKSIZIN surec bitince yazilan bir
+    CHAMELEON_DONE isareti eklenir -- tail donguesu boylece WinPmem'in
+    KENDI "Completed imaging" satirini beklemek yerine surecin GERCEKTEN
+    bittigini (hata ile de olsa) kesin bilir, 3600 saniyelik zaman asimini
+    beklemek zorunda kalmaz.
+    """
+    komut = subprocess.list2cmdline(args)
+    yonlendirilmis = f'{komut} > "{log_path}" 2>&1 & echo CHAMELEON_DONE>>"{log_path}"'
+    return f'/c "{yonlendirilmis}"'
+
+
+def winpmem_log_finished(log_text):
+    """cmd /c zinciri (basarili ya da basarisiz) bittiginde True doner."""
+    return "CHAMELEON_DONE" in log_text
+
+
+def winpmem_log_succeeded(log_text):
+    """WinPmem'in kendi bastigi basari satirini arar (bkz. gercek makinede
+    dogrulanan cikti: 'Completed imaging in ...')."""
+    return "Completed imaging" in log_text
+
+
 class ProcessListWorker(QThread):
     ready = Signal(list)
 
@@ -114,6 +154,8 @@ class RamWorker(QThread):
     def run(self):
         if self.mode == "process":
             self._run_process_mode()
+        elif self.mode == "full_winpmem":
+            self._run_full_mode_winpmem()
         else:
             self._run_full_mode()
 
@@ -349,6 +391,110 @@ class RamWorker(QThread):
             # amacini bozar. Kayit "acik" kalir, kullanici daha sonra
             # kontrol edip elle "yeniden baslat" ile temizleyebilir.
 
+    def _run_full_mode_winpmem(self):
+        """WinPmem ile Full RAM -- _run_full_mode ile AYNI ShellExecuteW+runas
+        yukseltme deseni, ama komut 'cmd.exe' uzerinden log_path'e yonlendiriliyor
+        (bkz. build_winpmem_elevate_params). Gercek makinede dogrulandi (bkz.
+        docs/roadmap.md): imzali surucu sayesinde test-signing/Secure Boot
+        degisikligi GEREKMIYOR."""
+        args, out_path = self.args, self.out_path
+        log_path = out_path + ".log"
+        try:
+            if os.path.exists(log_path):
+                os.remove(log_path)
+        except OSError:
+            pass
+
+        self.log.emit(f"$ {' '.join(args)} (Yönetici olarak, UAC istemi gelecek)")
+        try:
+            params = build_winpmem_elevate_params(args, log_path)
+            result = ctypes.windll.shell32.ShellExecuteW(None, "runas", "cmd.exe", params, None, 1)
+            if result <= 32:
+                self.log.emit(f"Yükseltme başarısız (kod {result}) -- UAC reddedildi olabilir.")
+                self.status.emit("Başlatılamadı / UAC reddedildi.", ui.ERROR)
+                return
+        except Exception as exc:
+            self.log.emit(f"Başlatılamadı: {exc}")
+            self.status.emit("Başlatılamadı.", ui.ERROR)
+            return
+
+        self._tail_log_winpmem(log_path, out_path)
+
+    def _tail_log_winpmem(self, log_path, out_path):
+        """_tail_log ile AYNI desen, iki fark: (1) bitis isareti vendor'in
+        .json'u degil CHAMELEON_DONE isareti (hem basari hem hata icin --
+        WinPmem'in kendi basari satiri ayrica aranir); (2) vendor'in hazir
+        hash'i olmadigi icin imaj bitince SHA-256/MD5/SHA-1 kendimiz
+        hesaplaniyor (_run_process_mode'daki AYNI gerekce)."""
+        if coc:
+            coc.log_event(coc.EVENT_EXAM_START, f"RAM full imaj (WinPmem) baslatildi: {out_path}")
+
+        op_id = None
+        if incomplete_ops:
+            op_id = incomplete_ops.record_start(
+                "ram_full", "PhysicalMemory (full, WinPmem)",
+                details={
+                    "case_id": self.case, "examiner": self.examiner,
+                    "custodian": self.custodian, "organization": self.organization,
+                    "out_path": out_path,
+                },
+            )
+
+        last_size = 0
+        waited = 0
+        tam_log = ""
+        while waited < 3600:  # full RAM uzun surebilir, 1 saate kadar bekle
+            time.sleep(1)
+            waited += 1
+            if os.path.exists(log_path):
+                try:
+                    with open(log_path, "r", encoding="utf-8", errors="replace") as f:
+                        f.seek(last_size)
+                        yeni = f.read()
+                        last_size = f.tell()
+                    if yeni:
+                        self.log.emit(yeni.rstrip("\n"))
+                        tam_log += yeni
+                except OSError:
+                    pass
+            if winpmem_log_finished(tam_log):
+                break
+
+        basarili = winpmem_log_succeeded(tam_log) and os.path.exists(out_path)
+        report = self._new_report("ram_full_winpmem", "PhysicalMemory (full, WinPmem)")
+
+        if basarili:
+            self.status.emit("Tamamlandı.", ui.SUCCESS)
+            image_hash = md5_hash = sha1_hash = None
+            if hash_file_multi and os.path.isfile(out_path):
+                try:
+                    hashler = hash_file_multi(out_path)
+                    image_hash = hashler.get("sha256")
+                    md5_hash = hashler.get("md5")
+                    sha1_hash = hashler.get("sha1")
+                except (OSError, ValueError):
+                    pass
+            if coc:
+                coc.log_event(coc.EVENT_EXAM_END, f"RAM full imaj (WinPmem) tamamlandi: {out_path}", image_hash)
+            if report:
+                report.finish(
+                    status="success", output_path=out_path, image_hash=image_hash,
+                    total_bytes=os.path.getsize(out_path) if os.path.exists(out_path) else None,
+                    md5_hash=md5_hash, sha1_hash=sha1_hash,
+                )
+                rapor_yolu = self._save_report(report, os.path.dirname(out_path) or ".")
+                self.report_ready.emit(report, rapor_yolu)
+            if incomplete_ops and op_id:
+                incomplete_ops.record_finish(op_id)
+        else:
+            self.status.emit("Bitmedi ya da hata oluştu, günlüğe bakın.", ui.ERROR)
+            if coc:
+                coc.log_event(coc.EVENT_EXAM_ERROR, f"RAM full imaj (WinPmem) basarisiz/tamamlanamadi: {out_path}")
+            if report:
+                report.finish(status="failed", output_path=out_path)
+                self._save_report(report, os.path.dirname(out_path) or ".")
+            # bkz. _tail_log'daki AYNI gerekce -- kayit "acik" kalir.
+
 
 class RamEngineWidget(QWidget):
     def __init__(self, on_back=None, on_show_help=None, initial_case_id="", initial_examiner="",
@@ -469,6 +615,25 @@ class RamEngineWidget(QWidget):
         warn.setStyleSheet(f"color:{ui.ERROR}; font-family:'{ui.FONT_UI}'; font-size:{ui.SIZE_HELPER}px;")
         self.full_card.body.addWidget(warn)
         self.full_card.body.addWidget(self._help_link("ram_full_mode_driver"))
+
+        # WinPmem (acik kaynak, Apache 2.0) -- RamImagerDriver.sys imzasiz
+        # oldugu icin "Error 577" ile basarisiz oldugunda alternatif motor;
+        # gercek makinede dogrulandi (bkz. docs/roadmap.md), test-signing/
+        # Secure Boot degisikligi GEREKMIYOR. Varsayilan olarak SECILI --
+        # vendor araci su an calismiyor, calisan secenek varsayilan olmali.
+        engine_row = QHBoxLayout()
+        engine_row.addWidget(QLabel(t("tool_ram_engine_label", self.lang)))
+        self.engine_group = QButtonGroup(self)
+        self.radio_engine_winpmem = widgets.RadioButton(t("tool_ram_engine_winpmem", self.lang))
+        self.radio_engine_vendor = widgets.RadioButton(t("tool_ram_engine_vendor", self.lang))
+        self.radio_engine_winpmem.setChecked(True)
+        for r in (self.radio_engine_winpmem, self.radio_engine_vendor):
+            self.engine_group.addButton(r)
+            engine_row.addWidget(r)
+        engine_row.addStretch()
+        self.full_card.body.addLayout(engine_row)
+        self.full_card.body.addWidget(self._note(t("tool_winpmem_hint", self.lang)))
+
         layout.addWidget(self.full_card)
         self.full_card.hide()
 
@@ -625,7 +790,12 @@ class RamEngineWidget(QWidget):
 
     # -- Calistirma --------------------------------------------------------
     def _start(self):
-        if not os.path.isfile(CLI_PATH):
+        full_winpmem = self.radio_full.isChecked() and self.radio_engine_winpmem.isChecked()
+        if full_winpmem:
+            if not os.path.isfile(WINPMEM_PATH):
+                self._set_status(t("tool_winpmem_not_found", self.lang, path=WINPMEM_PATH), ui.ERROR)
+                return
+        elif not os.path.isfile(CLI_PATH):
             self._set_status(t("tool_cli_not_found", self.lang, path=CLI_PATH), ui.ERROR)
             return
 
@@ -656,6 +826,12 @@ class RamEngineWidget(QWidget):
             self.worker = RamWorker(
                 "process", args, out_path, case, examiner, custodian,
                 organization=organization, display_timezone=self._display_timezone, process_label=secim,
+            )
+        elif full_winpmem:
+            args = [WINPMEM_PATH, "acquire", out_path]
+            self.worker = RamWorker(
+                "full_winpmem", args, out_path, case, examiner, custodian,
+                organization=organization, display_timezone=self._display_timezone,
             )
         else:
             args = [CLI_PATH, "full", "--output", out_path, "--driver", DRIVER_PATH]
