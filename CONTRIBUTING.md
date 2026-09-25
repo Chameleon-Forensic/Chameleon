@@ -50,10 +50,15 @@ ince bir katman; her yöntemin kendi tanıtım sayfasını da o dosyadaki
 `ram_engine` hakkında bilmen gerekenler: `src/engines/ram_engine/docs/`
 içinde zaten var, tekrar etmiyoruz — özellikle `USAGE.md` (CLI
 parametreleri) ve `PROJE_DOKUMANI.md` (mimari, IOCTL sözleşmesi, bilinen
-sınırlamalar) faydalı. Kısaca: `process` modu sürücü gerektirmez ve
-hemen çalışır, `full` modu (gerçek fiziksel RAM) imzasız bir test
-sürücüsü kullandığı için hedef makinede Secure Boot kapatma + test
-signing + reboot gerektiriyor.
+sınırlamalar) faydalı. Kısaca: `process` modu (verilen `RamImagerCLI.exe`
+ile) sürücü gerektirmez ve hemen çalışır. `full` modu (gerçek fiziksel RAM)
+`RamImagerCLI.exe`'nin sürücüsü imzasız olduğu için Secure Boot/test-signing
+gerektirip başarısız oluyordu (`Error 577`) — bu yüzden Full RAM artık
+`engines/ram_engine/winpmem/` altına gömülü WinPmem'i (Velocidex, Apache 2.0,
+değiştirilmeden gömülü sürüm) kullanıyor; sürücüsü düzgün imzalı olduğu için
+sadece bir kerelik Yönetici (UAC) onayı yeterli, Secure Boot/test-signing
+gerekmiyor (gerçek makinede doğrulandı, bkz. docs/roadmap.md). `RamImagerCLI.exe`
+sadece Process Dump'ta kullanılmaya devam ediyor.
 
 ## `ssh_engine` nasıl çalışıyor
 

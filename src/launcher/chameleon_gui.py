@@ -710,9 +710,9 @@ METHOD_INFO = {
             ],
             "requires": [
                 "Windows işletim sistemi",
-                "Full (tam bellek) modunda: Yönetici olarak çalıştırma + sürücünün "
-                "test-signing ile yüklenmiş olması (Secure Boot ayarını etkiler, "
-                "kendi makinenizde önceden hazırlanmalı)",
+                "Full (tam bellek) modunda: Yönetici olarak çalıştırma (başlatınca bir "
+                "kerelik UAC onay penceresi çıkar, önceden bir sürücü hazırlamak/sistem "
+                "ayarı değiştirmek gerekmez)",
             ],
             "steps": [
                 "\"Başlat\"a basıp (isteğe bağlı) vaka bilgilerini girin",
@@ -738,9 +738,9 @@ METHOD_INFO = {
             ],
             "requires": [
                 "Windows operating system",
-                "For Full (entire memory) mode: running as Administrator + the driver must be "
-                "loaded with test-signing enabled (affects the Secure Boot setting, must be "
-                "prepared in advance on your own machine)",
+                "For Full (entire memory) mode: running as Administrator (a one-time UAC "
+                "prompt appears when you start it; no need to prepare a driver in advance "
+                "or change any system setting)",
             ],
             "steps": [
                 "Click \"Start\" and (optionally) enter the case information",
@@ -766,9 +766,9 @@ METHOD_INFO = {
             ],
             "requires": [
                 "Sistema operativo Windows",
-                "En modo Full (memoria completa): ejecutar como Administrador + el controlador "
-                "debe estar cargado con test-signing habilitado (afecta la configuración de "
-                "Secure Boot, debe prepararse de antemano en su propio equipo)",
+                "En modo Full (memoria completa): ejecutar como Administrador (aparece una "
+                "ventana de confirmación UAC una sola vez; no hace falta preparar un "
+                "controlador de antemano ni cambiar ninguna configuración del sistema)",
             ],
             "steps": [
                 "Haga clic en \"Iniciar\" e (opcionalmente) introduzca la información del caso",
@@ -794,9 +794,9 @@ METHOD_INFO = {
             ],
             "requires": [
                 "Windows-Betriebssystem",
-                "Im Full-Modus (gesamter Speicher): Ausführung als Administrator + der Treiber "
-                "muss mit aktiviertem Test-Signing geladen sein (betrifft die Secure-Boot-"
-                "Einstellung, muss vorab auf Ihrem eigenen Rechner vorbereitet werden)",
+                "Im Full-Modus (gesamter Speicher): Ausführung als Administrator (beim Start "
+                "erscheint einmalig eine UAC-Abfrage; kein Treiber muss vorab vorbereitet oder "
+                "irgendeine Systemeinstellung geändert werden)",
             ],
             "steps": [
                 "Klicken Sie auf \"Starten\" und geben Sie (optional) die Fallinformationen ein",
@@ -823,9 +823,9 @@ METHOD_INFO = {
             ],
             "requires": [
                 "Sistema operacional Windows",
-                "No modo Full (memória completa): execução como Administrador + o driver deve "
-                "estar carregado com test-signing habilitado (afeta a configuração do Secure "
-                "Boot, deve ser preparado com antecedência em sua própria máquina)",
+                "No modo Full (memória completa): execução como Administrador (aparece uma "
+                "janela de confirmação UAC uma única vez; não é preciso preparar um driver "
+                "com antecedência nem alterar nenhuma configuração do sistema)",
             ],
             "steps": [
                 "Clique em \"Iniciar\" e (opcionalmente) insira as informações do caso",
@@ -851,9 +851,9 @@ METHOD_INFO = {
             ],
             "requires": [
                 "Système d'exploitation Windows",
-                "En mode Complet (mémoire entière) : exécution en tant qu'Administrateur + le "
-                "pilote doit être chargé avec le test-signing activé (affecte le paramètre "
-                "Secure Boot, doit être préparé à l'avance sur votre propre machine)",
+                "En mode Complet (mémoire entière) : exécution en tant qu'Administrateur (une "
+                "invite UAC unique apparaît au démarrage ; aucun pilote à préparer à l'avance "
+                "ni aucun paramètre système à modifier)",
             ],
             "steps": [
                 "Cliquez sur \"Démarrer\" et (facultatif) saisissez les informations du dossier",

@@ -4,7 +4,7 @@ Chameleon, bir bilgisayarın diskini, dosyalarını ya da belleğini (RAM) **boz
 **SHA-256 ile bütünlüğü kanıtlanabilir** şekilde kopyalayan bir adli bilişim
 (digital forensics) aracıdır. Bu doküman, yazılımın sunduğu özellikleri anlatır.
 
-## 1. İki alma yöntemi
+## 1. Üç alma yöntemi
 
 ### SSH ile Uzak İmaj Alma
 Ağ üzerinden erişilebilen bir **Linux ya da Windows** bilgisayardan, SSH
@@ -17,7 +17,9 @@ Server) yeterlidir.
   karışmaz.
   - **Live Acquisition**: Disk aktif kullanımdayken (write-block uygulanmadan)
   - **Offline Acquisition**: Disk salt-okunur (write-blocked) hale getirilerek
-  - **Ayarlanabilir parça (blok) boyutu**: 4 / 16 / 32 / 64 MB arasından seçilebilir
+  - **Ayarlanabilir parça (blok) boyutu**: 4 / 16 / 32 / 64 MB arasından
+    seçilebilir; hangi boyutun hangi bağlantı hızı için önerildiği
+    (yavaş/orta/hızlı/yerel ağ) arayüzde açıklanır
   - **Bağlantı koparsa devam edilebilir (resume)**: Yarım kalan bir işlem,
     kaldığı yerden tekrar başlatılabilir
   - **Yerel disk alanı ön kontrolü**: İmaj almaya başlamadan önce, yerel
@@ -30,13 +32,36 @@ Server) yeterlidir.
   - **Sıkıştırma (gzip, sadece Offline modda)**: Tam disk imajı isteğe bağlı
     olarak gzip ile sıkıştırılıp diskten tasarruf edilebilir. Delil bütünlüğü
     hash'i her zaman sıkıştırılmamış içeriğe aittir.
+- **Mantıksal İmaj**: Bir hacmin (volume) TÜM okunabilen dosyalarını alır —
+  Tam Disk (blok seviyesi, çok yavaş/büyük) ile Dosya/Klasör (elle seçim)
+  arasında bir orta yol. Başka bir bölüme/bağlı diske geçilmez (her hacim
+  için ayrı imaj). Silinmiş veri ve boş alan bu modda alınmaz. Kilitli/
+  erişilemeyen dosyalar (ör. çalışan bir Windows'un açık registry
+  dosyaları) sessizce atlanmaz — SEBEBİYLE raporlanır.
+- **Alma sonrası ağaç görünümü**: Dosya/Klasör ve Mantıksal İmaj modlarında,
+  işlem bitince alınan dosyaların klasör yapısı bir ağaç olarak
+  görüntülenebilir; bir dosyaya çift tıklanınca diske yazılan hâli açılır.
+
+### Yerel İmaj Alma (Bu Bilgisayar, SSH Gerekmez)
+İncelenecek bilgisayara ağ üzerinden erişilemediği ama fiziksel olarak
+erişilebildiği durumlar için: araç, incelenen bilgisayarın KENDİSİNDE
+çalıştırılıp yukarıdaki üç alma türünün (Tam Disk, Dosya/Klasör, Mantıksal
+İmaj) hepsi SSH'siz, doğrudan yapılabilir. Çıktı, USB gibi harici bir diske
+yazılır.
+- Ham diske okumak için Yönetici yetkisi gerekir.
+- Çıktının, imajı alınan diskle AYNI fiziksel diskte olması ya da (mantıksal/
+  dosya modunda) taranan kökün içinde olması engellenir — kaynağa yazıp
+  delili değiştirme riskine karşı.
+- Çalışan sistemin kendi diski seçilirse Offline (write-blocker) modu
+  sunulmaz; Live seçilirse açıkça uyarılıp onay istenir.
 
 ### RAM İmajı Alma (Windows, yerel)
 Bu bilgisayarın kendi belleğini imaj alır — uzak bağlantı gerekmez.
 - **Process Dump**: Tek bir çalışan programın belleği. Yönetici yetkisi
   gerekmez, hızlıdır.
-- **Full (Tam Bellek)**: Tüm sistem belleği. Yönetici yetkisi ve önceden
-  hazırlanmış bir sürücü (driver) gerektirir.
+- **Full (Tam Bellek)**: Tüm sistem belleği. Düzgün imzalı bir sürücü
+  kullanır, bu yüzden sadece bir kerelik Yönetici (UAC) onayı yeterlidir —
+  önceden bir sürücü hazırlamak/sistem ayarı değiştirmek gerekmez.
 
 ## 2. Üç bağlantı yöntemi
 
@@ -107,7 +132,8 @@ duruma göre değişir:
 
 ## 5. Kullanılabilirlik
 
-- Açık/koyu tema, Türkçe/İngilizce dil desteği.
+- Açık/koyu tema, 6 dilde (Türkçe, İngilizce, İspanyolca, Almanca,
+  Portekizce, Fransızca) dil desteği.
 - SSH ekranındaki Host alanı, önceki başarılı bağlantıları hatırlar — bir
   öneri seçildiğinde port/kullanıcı adı da otomatik doldurulur (parola
   hiçbir zaman hatırlanmaz).

@@ -44,9 +44,8 @@ python src/launcher/chameleon_gui.py
 `src/dist/Chameleon.exe` çift tıkla açılır, Python kurulumu gerekmez.
 
 Açılan pencerede sol menüden bir yöntem seçilir; RAM motoru sadece
-Windows'ta çalışır, tam RAM imajı almak Yönetici yetkisi ve
-`src/engines/ram_engine/INSTALL.txt`'teki test-signing adımlarını
-gerektirir.
+Windows'ta çalışır, tam RAM imajı almak sadece bir kerelik Yönetici (UAC)
+onayı gerektirir.
 
 ## Planlanan işler
 
