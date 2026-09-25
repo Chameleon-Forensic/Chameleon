@@ -15,7 +15,6 @@ import csv
 import ctypes
 import hashlib
 import io
-import json
 import os
 import subprocess
 import sys
@@ -29,10 +28,11 @@ from PySide6.QtWidgets import (
 
 RAM_ENGINE_DIR = os.path.dirname(os.path.abspath(__file__))
 CLI_PATH = os.path.join(RAM_ENGINE_DIR, "cli", "RamImagerCLI.exe")
-DRIVER_PATH = os.path.join(RAM_ENGINE_DIR, "driver", "RamImagerDriver.sys")
-# WinPmem (Velocidex, Apache 2.0, degistirilmemis resmi surum -- bkz.
-# winpmem/THIRD_PARTY_LICENSES.txt) -- RamImagerDriver.sys'in imzasiz oldugu
-# icin basarisiz oldugu (Error 577) durumlarda Full RAM icin alternatif motor.
+# Full RAM icin kullanilan arac (Velocidex WinPmem, Apache 2.0, degistirilmemis
+# resmi surum -- bkz. winpmem/THIRD_PARTY_LICENSES.txt). Vendor'in
+# RamImagerDriver.sys'i imzasiz oldugu icin Full modda calismiyordu (Error 577,
+# gercek makinede dogrulandi); RamImagerCLI.exe SADECE Process Dump modunda
+# kullaniliyor (o mod surucu gerektirmiyor).
 WINPMEM_PATH = os.path.join(RAM_ENGINE_DIR, "winpmem", "go-winpmem_amd64_1.0-rc2_signed.exe")
 
 _SHARED_DIR = os.path.join(RAM_ENGINE_DIR, "..", "..", "shared")
@@ -88,8 +88,8 @@ def list_processes():
 def build_winpmem_elevate_params(args, log_path):
     """
     ShellExecuteW ile 'cmd.exe'yi 'runas' verbiyle yukseltmek icin parametre
-    metni. WinPmem, RamImagerCLI'nin aksine kendi log dosyasini yazmiyor ve
-    yukseltilmis surecin stdout'u ana surece aktarilamiyor (bkz. _run_full_mode
+    metni. Full RAM araci kendi log dosyasini yazmiyor ve yukseltilmis
+    surecin stdout'u ana surece aktarilamiyor (bkz. RamWorker._run_full_mode_winpmem
     docstring'i) -- bu yuzden ciktiyi 'cmd /c' ile log_path'e yonlendiriyoruz.
 
     cmd.exe'nin bilinen kurali: /c'den sonraki metnin ILK ve SON karakteri
@@ -115,6 +115,18 @@ def winpmem_log_finished(log_text):
     return "CHAMELEON_DONE" in log_text
 
 
+def format_duration_tr(seconds):
+    """Saniyeyi kisa bir TR sure metnine cevirir (45 sn / 2 dk 10 sn / 1 sa 5 dk)."""
+    saniye = max(0, int(seconds))
+    if saniye < 60:
+        return f"{saniye} sn"
+    dakika, saniye = divmod(saniye, 60)
+    if dakika < 60:
+        return f"{dakika} dk {saniye} sn" if saniye else f"{dakika} dk"
+    saat, dakika = divmod(dakika, 60)
+    return f"{saat} sa {dakika} dk"
+
+
 def winpmem_log_succeeded(log_text):
     """WinPmem'in kendi bastigi basari satirini arar (bkz. gercek makinede
     dogrulanan cikti: 'Completed imaging in ...')."""
@@ -130,9 +142,8 @@ class ProcessListWorker(QThread):
 
 class RamWorker(QThread):
     """
-    _run_process_mode/_run_full_mode/_tail_log'un tasindigi yer. Govdeler
-    ram_gui.py'deki ile BIREBIR AYNI -- degisen tek sey, widget'lara
-    dogrudan dokunmak yerine sinyal yaymalari (thread-guvenli Qt koprusu).
+    _run_process_mode/_run_full_mode_winpmem'in calistigi yer. Widget'lara
+    dogrudan dokunmak yerine sinyal yayar (thread-guvenli Qt koprusu).
     """
     log = Signal(str)
     status = Signal(str, str)  # (metin, renk_hex)
@@ -150,14 +161,14 @@ class RamWorker(QThread):
         self.organization = organization
         self.display_timezone = display_timezone
         self.process_label = process_label
+        self._hash_started_at = None
+        self._hash_last_emit = 0.0
 
     def run(self):
         if self.mode == "process":
             self._run_process_mode()
-        elif self.mode == "full_winpmem":
-            self._run_full_mode_winpmem()
         else:
-            self._run_full_mode()
+            self._run_full_mode_winpmem()
 
     def _new_report(self, method, source_identifier):
         if ForensicReport is None:
@@ -172,6 +183,28 @@ class RamWorker(QThread):
         )
         report.set_write_blocking(False, "RAM imajlama icin write-blocking kavrami gecerli degil")
         return report
+
+    def _emit_hash_progress(self, islenen, toplam):
+        """hash_file_multi'nin progress callback'i -- kalan sureyi SABIT bir
+        tahmin yerine O ANKI OLCULEN gercek hiza gore hesaplar, boylece RAM
+        boyutuna ve donanima (disk/CPU hizi) otomatik uyar. Sinyal trafigini
+        bogmamak icin en fazla saniyede bir guncellenir."""
+        simdi = time.monotonic()
+        if self._hash_started_at is None:
+            self._hash_started_at = simdi
+        if simdi - self._hash_last_emit < 1.0 and islenen < toplam:
+            return
+        self._hash_last_emit = simdi
+        yuzde = (islenen * 100 / toplam) if toplam else 0
+        gecen = simdi - self._hash_started_at
+        if islenen > 0 and gecen > 0.5:
+            hiz = islenen / gecen
+            kalan_sn = (toplam - islenen) / hiz if hiz > 0 else 0
+            self.status.emit(
+                f"Doğrulanıyor (hash hesaplanıyor)... %{yuzde:.0f}, tahmini kalan: {format_duration_tr(kalan_sn)}", None,
+            )
+        else:
+            self.status.emit(f"Doğrulanıyor (hash hesaplanıyor)... %{yuzde:.0f}", None)
 
     def _save_report(self, report, output_dir):
         if report is None:
@@ -262,141 +295,16 @@ class RamWorker(QThread):
             if incomplete_ops and op_id:
                 incomplete_ops.record_finish(op_id)
 
-    def _run_full_mode(self):
-        """AYNEN tasindi -- full mod Yonetici gerektirir; ShellExecute
-        'runas' ile yukseltip ilerlemeyi <output>.log dosyasini tail'leyerek
-        gosteriyoruz (yukseltilmis surecin stdout'u ana surece aktarilamaz)."""
-        args, out_path = self.args, self.out_path
-        log_path = out_path + ".log"
-        try:
-            if os.path.exists(log_path):
-                os.remove(log_path)
-        except OSError:
-            pass
-
-        self.log.emit(f"$ {' '.join(args)} (Yönetici olarak, UAC istemi gelecek)")
-        try:
-            # subprocess.list2cmdline: Windows'un argv kacirma kuralini
-            # (tirnak/backslash) dogru uyguluyor -- eski " ".join(...) sadece
-            # bosluk varsa tirnakliyordu, icindeki " karakterini hic
-            # kacirmiyordu (vaka no/inceleyen gibi serbest metin alanlarindan
-            # yukseltilmis surece arguman enjeksiyonuna acikti).
-            params = subprocess.list2cmdline(args[1:])
-            result = ctypes.windll.shell32.ShellExecuteW(None, "runas", args[0], params, None, 1)
-            if result <= 32:
-                self.log.emit(f"Yükseltme başarısız (kod {result}) -- UAC reddedildi olabilir.")
-                self.status.emit("Başlatılamadı / UAC reddedildi.", ui.ERROR)
-                return
-        except Exception as exc:
-            self.log.emit(f"Başlatılamadı: {exc}")
-            self.status.emit("Başlatılamadı.", ui.ERROR)
-            return
-
-        self._tail_log(log_path, out_path)
-
-    def _tail_log(self, log_path, out_path):
-        """AYNEN tasindi -- log_path'i periyodik okuyup yeni satirlari
-        gosterir, ciktinin (.img dosyasinin) belirmesini bitis isareti sayar."""
-        if coc:
-            coc.log_event(coc.EVENT_EXAM_START, f"RAM full imaj baslatildi: {out_path}")
-
-        # bkz. _run_process_mode'daki AYNI gerekce -- gercek resume degil,
-        # sadece "basladi, bitirmedi" kaydi (bkz. incomplete_ops.py).
-        op_id = None
-        if incomplete_ops:
-            op_id = incomplete_ops.record_start(
-                "ram_full", "PhysicalMemory (full)",
-                details={
-                    "case_id": self.case, "examiner": self.examiner,
-                    "custodian": self.custodian, "organization": self.organization,
-                    "out_path": out_path,
-                },
-            )
-
-        last_size = 0
-        waited = 0
-        while waited < 3600:  # full RAM uzun surebilir, 1 saate kadar bekle
-            time.sleep(1)
-            waited += 1
-            if os.path.exists(log_path):
-                try:
-                    with open(log_path, "r", encoding="utf-8", errors="replace") as f:
-                        f.seek(last_size)
-                        yeni = f.read()
-                        last_size = f.tell()
-                    if yeni:
-                        self.log.emit(yeni.rstrip("\n"))
-                except OSError:
-                    pass
-            if os.path.exists(out_path) and os.path.exists(out_path + ".json"):
-                break
-
-        basarili = os.path.exists(out_path) and os.path.exists(out_path + ".json")
-        report = self._new_report("ram_full", "PhysicalMemory (full)")
-
-        if basarili:
-            self.status.emit("Tamamlandı.", ui.SUCCESS)
-            vendor_hash = None
-            vendor_bytes = None
-            try:
-                with open(out_path + ".json", "r", encoding="utf-8") as f:
-                    vendor_meta = json.load(f)
-                vendor_hash = vendor_meta.get("sha256")
-                vendor_bytes = vendor_meta.get("size") or vendor_meta.get("total_size")
-            except (OSError, json.JSONDecodeError) as exc:
-                self.log.emit(f"[UYARI] RamImagerCLI metadata okunamadi: {exc}")
-
-            if coc:
-                coc.log_event(coc.EVENT_EXAM_END, f"RAM full imaj tamamlandi: {out_path}", vendor_hash)
-            # SHA-256 (vendor_hash) RamImagerCLI'nin kendi metadata'sindan
-            # geldigi icin dosya HENUZ okunmadi -- MD5/SHA-1 icin TEK bir
-            # okuma gerekiyor (SHA-256'yi tekrar hesaplamiyoruz, sadece
-            # md5/sha1 istiyoruz) -- oncesinde bu ikisi forensic_report.
-            # finish() icinde AYRI bir tam okuma ile hesaplaniyordu.
-            md5_hash = None
-            sha1_hash = None
-            if hash_file_multi and os.path.isfile(out_path):
-                try:
-                    ek_hashler = hash_file_multi(out_path, algorithms=("md5", "sha1"))
-                    md5_hash = ek_hashler.get("md5")
-                    sha1_hash = ek_hashler.get("sha1")
-                except (OSError, ValueError):
-                    pass
-            if report:
-                report.finish(
-                    status="success", output_path=out_path, image_hash=vendor_hash,
-                    total_bytes=vendor_bytes or (os.path.getsize(out_path) if os.path.exists(out_path) else None),
-                    md5_hash=md5_hash, sha1_hash=sha1_hash,
-                )
-                rapor_yolu = self._save_report(report, os.path.dirname(out_path) or ".")
-                self.report_ready.emit(report, rapor_yolu)
-            # "Yarim Kalanlar" kaydi SADECE gercek basari durumunda
-            # kaldirilir -- bkz. asagidaki else dalindaki not.
-            if incomplete_ops and op_id:
-                incomplete_ops.record_finish(op_id)
-        else:
-            self.status.emit("Bitmedi ya da hata oluştu, günlüğe bakın.", ui.ERROR)
-            if coc:
-                coc.log_event(coc.EVENT_EXAM_ERROR, f"RAM full imaj basarisiz/tamamlanamadi: {out_path}")
-            if report:
-                report.finish(status="failed", output_path=out_path)
-                self._save_report(report, os.path.dirname(out_path) or ".")
-            # KASITLI OLARAK incomplete_ops.record_finish() cagirmiyoruz:
-            # RamImagerCLI ShellExecuteW ile ayrik/yukseltilmis baslatildigi
-            # icin bu thread'in sureci "kesin oldu" diye bilme sansi yok --
-            # 1 saatlik bekleme suresi dolup buraya dusulmus olabilir ama
-            # surec hala calisip birkaç dakika sonra dosyayi tamamliyor
-            # olabilir (kullanici bildirdi). Kaydi burada silersek "Yarim
-            # Kalanlar" listesi sureç hala surerken onu kaybeder -- ozelligin
-            # amacini bozar. Kayit "acik" kalir, kullanici daha sonra
-            # kontrol edip elle "yeniden baslat" ile temizleyebilir.
-
     def _run_full_mode_winpmem(self):
-        """WinPmem ile Full RAM -- _run_full_mode ile AYNI ShellExecuteW+runas
-        yukseltme deseni, ama komut 'cmd.exe' uzerinden log_path'e yonlendiriliyor
-        (bkz. build_winpmem_elevate_params). Gercek makinede dogrulandi (bkz.
-        docs/roadmap.md): imzali surucu sayesinde test-signing/Secure Boot
-        degisikligi GEREKMIYOR."""
+        """Full RAM -- Yonetici (UAC) gerektirir; ShellExecuteW 'runas' ile
+        yukseltilmis 'cmd.exe' cagrilir, cikti 'cmd /c' ile log_path'e
+        yonlendirilir (bkz. build_winpmem_elevate_params) -- yukseltilmis
+        surecin stdout'u ana surece dogrudan aktarilamiyor. Gercek makinede
+        dogrulandi (bkz. docs/roadmap.md): kullanilan surucu imzali oldugu
+        icin test-signing/Secure Boot degisikligi GEREKMIYOR, sadece o anki
+        UAC onayi yeterli. Pencere gizli (SW_HIDE) baslatilir -- ilerleme
+        zaten uygulamanin kendi gunluk paneline aktariliyor, ayri bir konsol
+        penceresine gerek yok."""
         args, out_path = self.args, self.out_path
         log_path = out_path + ".log"
         try:
@@ -408,7 +316,7 @@ class RamWorker(QThread):
         self.log.emit(f"$ {' '.join(args)} (Yönetici olarak, UAC istemi gelecek)")
         try:
             params = build_winpmem_elevate_params(args, log_path)
-            result = ctypes.windll.shell32.ShellExecuteW(None, "runas", "cmd.exe", params, None, 1)
+            result = ctypes.windll.shell32.ShellExecuteW(None, "runas", "cmd.exe", params, None, 0)
             if result <= 32:
                 self.log.emit(f"Yükseltme başarısız (kod {result}) -- UAC reddedildi olabilir.")
                 self.status.emit("Başlatılamadı / UAC reddedildi.", ui.ERROR)
@@ -464,11 +372,16 @@ class RamWorker(QThread):
         report = self._new_report("ram_full_winpmem", "PhysicalMemory (full, WinPmem)")
 
         if basarili:
-            self.status.emit("Tamamlandı.", ui.SUCCESS)
+            # "Tamamlandı" BURADA degil, asagida (hash+rapor GERCEKTEN
+            # bitince) yaziliyor -- 26+ GB'lik bir imajda SHA-256/MD5/SHA-1
+            # hesaplamasi dakikalar surebilir; "Tamamlandı" ONCEDEN yazilirsa
+            # ilerleme cubugu (haklı olarak) donmeye devam ederken ekran
+            # "bitti" diyor, kullanici bunu hata saniyor (bkz. docs/roadmap.md).
+            self.status.emit("Doğrulanıyor (hash hesaplanıyor)... (süre RAM boyutuna ve donanıma göre değişir)", None)
             image_hash = md5_hash = sha1_hash = None
             if hash_file_multi and os.path.isfile(out_path):
                 try:
-                    hashler = hash_file_multi(out_path)
+                    hashler = hash_file_multi(out_path, progress=self._emit_hash_progress)
                     image_hash = hashler.get("sha256")
                     md5_hash = hashler.get("md5")
                     sha1_hash = hashler.get("sha1")
@@ -486,6 +399,7 @@ class RamWorker(QThread):
                 self.report_ready.emit(report, rapor_yolu)
             if incomplete_ops and op_id:
                 incomplete_ops.record_finish(op_id)
+            self.status.emit("Tamamlandı.", ui.SUCCESS)
         else:
             self.status.emit("Bitmedi ya da hata oluştu, günlüğe bakın.", ui.ERROR)
             if coc:
@@ -615,24 +529,6 @@ class RamEngineWidget(QWidget):
         warn.setStyleSheet(f"color:{ui.ERROR}; font-family:'{ui.FONT_UI}'; font-size:{ui.SIZE_HELPER}px;")
         self.full_card.body.addWidget(warn)
         self.full_card.body.addWidget(self._help_link("ram_full_mode_driver"))
-
-        # WinPmem (acik kaynak, Apache 2.0) -- RamImagerDriver.sys imzasiz
-        # oldugu icin "Error 577" ile basarisiz oldugunda alternatif motor;
-        # gercek makinede dogrulandi (bkz. docs/roadmap.md), test-signing/
-        # Secure Boot degisikligi GEREKMIYOR. Varsayilan olarak SECILI --
-        # vendor araci su an calismiyor, calisan secenek varsayilan olmali.
-        engine_row = QHBoxLayout()
-        engine_row.addWidget(QLabel(t("tool_ram_engine_label", self.lang)))
-        self.engine_group = QButtonGroup(self)
-        self.radio_engine_winpmem = widgets.RadioButton(t("tool_ram_engine_winpmem", self.lang))
-        self.radio_engine_vendor = widgets.RadioButton(t("tool_ram_engine_vendor", self.lang))
-        self.radio_engine_winpmem.setChecked(True)
-        for r in (self.radio_engine_winpmem, self.radio_engine_vendor):
-            self.engine_group.addButton(r)
-            engine_row.addWidget(r)
-        engine_row.addStretch()
-        self.full_card.body.addLayout(engine_row)
-        self.full_card.body.addWidget(self._note(t("tool_winpmem_hint", self.lang)))
 
         layout.addWidget(self.full_card)
         self.full_card.hide()
@@ -790,13 +686,12 @@ class RamEngineWidget(QWidget):
 
     # -- Calistirma --------------------------------------------------------
     def _start(self):
-        full_winpmem = self.radio_full.isChecked() and self.radio_engine_winpmem.isChecked()
-        if full_winpmem:
-            if not os.path.isfile(WINPMEM_PATH):
-                self._set_status(t("tool_winpmem_not_found", self.lang, path=WINPMEM_PATH), ui.ERROR)
+        if self.radio_process.isChecked():
+            if not os.path.isfile(CLI_PATH):
+                self._set_status(t("tool_cli_not_found", self.lang, path=CLI_PATH), ui.ERROR)
                 return
-        elif not os.path.isfile(CLI_PATH):
-            self._set_status(t("tool_cli_not_found", self.lang, path=CLI_PATH), ui.ERROR)
+        elif not os.path.isfile(WINPMEM_PATH):
+            self._set_status(t("tool_full_tool_not_found", self.lang, path=WINPMEM_PATH), ui.ERROR)
             return
 
         out_path = self.entry_out.text().strip()
@@ -827,18 +722,8 @@ class RamEngineWidget(QWidget):
                 "process", args, out_path, case, examiner, custodian,
                 organization=organization, display_timezone=self._display_timezone, process_label=secim,
             )
-        elif full_winpmem:
-            args = [WINPMEM_PATH, "acquire", out_path]
-            self.worker = RamWorker(
-                "full_winpmem", args, out_path, case, examiner, custodian,
-                organization=organization, display_timezone=self._display_timezone,
-            )
         else:
-            args = [CLI_PATH, "full", "--output", out_path, "--driver", DRIVER_PATH]
-            if case:
-                args += ["--case", case]
-            if examiner:
-                args += ["--examiner", examiner]
+            args = [WINPMEM_PATH, "acquire", out_path]
             self.worker = RamWorker(
                 "full", args, out_path, case, examiner, custodian,
                 organization=organization, display_timezone=self._display_timezone,

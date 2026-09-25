@@ -693,12 +693,12 @@ HELP_TOPICS = [
     {
         "key": "ram_full_mode_driver",
         "title": {
-            "tr": "RAM 'Full' Modu: Yönetici, Sürücü ve Secure Boot Ne Demek?",
-            "en": "RAM \"Full\" Mode: What Do Administrator, Driver, and Secure Boot Mean?",
-            "es": "Modo RAM \"Completo\": ¿Qué Significan Administrador, Controlador y Secure Boot?",
-            "de": "RAM-\"Full\"-Modus: Was Bedeuten Administrator, Treiber und Secure Boot?",
-            "pt": "Modo RAM \"Completo\": O Que Significam Administrador, Driver e Secure Boot?",
-            "fr": "Mode RAM \"Complet\" : Que Signifient Administrateur, Pilote et Secure Boot ?",
+            "tr": "RAM 'Full' Modu: Yönetici Neden Gerekiyor?",
+            "en": "RAM \"Full\" Mode: Why Is Administrator Needed?",
+            "es": "Modo RAM \"Completo\": ¿Por Qué Se Necesita Administrador?",
+            "de": "RAM-\"Full\"-Modus: Warum Ist Administrator Nötig?",
+            "pt": "Modo RAM \"Completo\": Por Que É Preciso Administrador?",
+            "fr": "Mode RAM \"Complet\" : Pourquoi Faut-il Être Administrateur ?",
         },
         "body": {
             "tr": (
@@ -707,19 +707,14 @@ HELP_TOPICS = [
                 "alır. Yönetici yetkisi gerekmez, hızlıdır.\n\n"
                 "Full: bilgisayarın TÜM sistem belleğini alır -- açık tüm programların "
                 "ve işletim sisteminin o anki tam görüntüsü. Bunun için Windows'un "
-                "normalde izin vermediği düşük seviyeli bir erişim gerekir; bu erişimi "
-                "sağlayan küçük yazılım parçasına \"sürücü\" (driver) denir.\n\n"
-                "Windows, güvenlik için resmi olarak imzalanmamış (test amaçlı) "
-                "sürücülerin yüklenmesini varsayılan olarak engeller. \"Test-signing\" "
-                "bu engeli açan bir Windows ayarıdır -- açıldığında bilgisayar bunu "
-                "ekranda bir filigranla gösterir. Bu ayar, bilgisayarın başka bir "
-                "güvenlik özelliği olan \"Secure Boot\"un (açılış sırasında sadece "
-                "güvenilir/imzalı yazılımların çalışmasını sağlayan koruma) "
-                "kapatılmasını gerektirebilir.\n\n"
-                "Bu yüzden Full mod, inceleyeceğiniz bilgisayarda DEĞİL, KENDİ "
-                "makinenizde önceden hazırlanmalıdır -- rastgele bir hedef cihazda bu "
-                "ayarları değiştirmek pratikte çoğu zaman mümkün olmaz ve delil "
-                "bütünlüğünü riske atar."
+                "normalde izin vermediği düşük seviyeli bir erişim gerekir; bu yüzden "
+                "başlatırken bir Yönetici (UAC) onay penceresi çıkar, onaylamanız "
+                "gerekir.\n\n"
+                "Kullanılan düşük seviyeli erişim bileşeni düzgün imzalı olduğu için "
+                "(Windows'un normalde reddettiği türden test amaçlı, imzasız bir "
+                "bileşen değil), Secure Boot'u kapatmak ya da \"test-signing\" gibi "
+                "kalıcı bir sistem ayarı değiştirmek GEREKMEZ -- sadece o anki UAC "
+                "onayı yeterlidir."
             ),
             "en": (
                 "The RAM Image screen has two modes:\n\n"
@@ -728,19 +723,13 @@ HELP_TOPICS = [
                 "Full: acquires the computer's ENTIRE system memory -- a complete "
                 "snapshot of all running programs and the operating system at that "
                 "moment. This requires a low-level access that Windows doesn't "
-                "normally allow; the small piece of software that provides this access "
-                "is called a \"driver\".\n\n"
-                "For security, Windows blocks the loading of unofficially-signed "
-                "(test-purpose) drivers by default. \"Test-signing\" is a Windows "
-                "setting that lifts this block -- once enabled, the computer shows "
-                "this with a watermark on screen. This setting may require disabling "
-                "another security feature of the computer, \"Secure Boot\" (a "
-                "protection that ensures only trusted/signed software runs during "
-                "startup).\n\n"
-                "That's why Full mode must be prepared in advance on YOUR OWN machine, "
-                "NOT on the computer you'll be examining -- changing these settings on "
-                "an arbitrary target device is usually impractical, and risks the "
-                "integrity of the evidence."
+                "normally allow; that's why a one-time Administrator (UAC) prompt "
+                "appears when you start it, which you need to approve.\n\n"
+                "Because the low-level access component in use is properly signed "
+                "(not an unsigned, test-purpose one of the kind Windows normally "
+                "rejects), you do NOT need to disable Secure Boot or change a "
+                "persistent system setting like \"test-signing\" -- approving that "
+                "one UAC prompt is enough."
             ),
             "es": (
                 "La pantalla de Imagen de RAM tiene dos modos:\n\n"
@@ -749,21 +738,14 @@ HELP_TOPICS = [
                 "Completo: obtiene TODA la memoria del sistema del equipo -- una "
                 "instantánea completa de todos los programas en ejecución y del "
                 "sistema operativo en ese momento. Esto requiere un acceso de bajo "
-                "nivel que Windows normalmente no permite; la pequeña pieza de "
-                "software que proporciona este acceso se llama \"controlador\" "
-                "(driver).\n\n"
-                "Por seguridad, Windows bloquea de forma predeterminada la carga de "
-                "controladores no firmados oficialmente (con fines de prueba). "
-                "\"Test-signing\" es una configuración de Windows que levanta este "
-                "bloqueo -- una vez activada, el equipo lo muestra con una marca de "
-                "agua en pantalla. Esta configuración puede requerir desactivar otra "
-                "función de seguridad del equipo, \"Secure Boot\" (una protección que "
-                "garantiza que solo se ejecute software de confianza/firmado durante "
-                "el arranque).\n\n"
-                "Por eso el modo Completo debe prepararse de antemano en SU PROPIO "
-                "equipo, NO en el equipo que va a examinar -- cambiar estos ajustes en "
-                "un dispositivo destino arbitrario suele ser poco práctico y pone en "
-                "riesgo la integridad de la evidencia."
+                "nivel que Windows normalmente no permite; por eso aparece una "
+                "ventana de confirmación de Administrador (UAC) al iniciarlo, que "
+                "debe aprobar.\n\n"
+                "Como el componente de acceso de bajo nivel utilizado está "
+                "correctamente firmado (no es uno sin firmar, de tipo prueba, de los "
+                "que Windows normalmente rechaza), NO necesita desactivar Secure "
+                "Boot ni cambiar un ajuste permanente del sistema como "
+                "\"test-signing\" -- basta con aprobar esa única ventana UAC."
             ),
             "de": (
                 "Der Bildschirm RAM-Image hat zwei Modi:\n\n"
@@ -772,22 +754,14 @@ HELP_TOPICS = [
                 "Vollständig: erfasst den GESAMTEN Systemspeicher des Computers -- "
                 "eine vollständige Momentaufnahme aller laufenden Programme und des "
                 "Betriebssystems zu diesem Zeitpunkt. Dies erfordert einen "
-                "Low-Level-Zugriff, den Windows normalerweise nicht erlaubt; das "
-                "kleine Software-Stück, das diesen Zugriff ermöglicht, wird "
-                "\"Treiber\" genannt.\n\n"
-                "Aus Sicherheitsgründen blockiert Windows standardmäßig das Laden "
-                "nicht offiziell signierter (zu Testzwecken bestimmter) Treiber. "
-                "\"Test-Signing\" ist eine Windows-Einstellung, die diese Blockade "
-                "aufhebt -- ist sie aktiviert, zeigt der Computer dies mit einem "
-                "Wasserzeichen auf dem Bildschirm an. Diese Einstellung kann "
-                "erfordern, dass eine weitere Sicherheitsfunktion des Computers, "
-                "\"Secure Boot\" (ein Schutz, der sicherstellt, dass beim Start nur "
-                "vertrauenswürdige/signierte Software läuft), deaktiviert wird.\n\n"
-                "Deshalb muss der Full-Modus vorab auf IHREM EIGENEN Rechner "
-                "vorbereitet werden, NICHT auf dem Computer, den Sie untersuchen "
-                "werden -- das Ändern dieser Einstellungen auf einem beliebigen "
-                "Zielgerät ist in der Praxis meist nicht möglich und gefährdet die "
-                "Integrität der Beweismittel."
+                "Low-Level-Zugriff, den Windows normalerweise nicht erlaubt; deshalb "
+                "erscheint beim Start eine einmalige Administrator-(UAC-)Abfrage, "
+                "die Sie bestätigen müssen.\n\n"
+                "Da die verwendete Low-Level-Zugriffskomponente ordnungsgemäß "
+                "signiert ist (keine unsignierte Testkomponente, wie Windows sie "
+                "normalerweise ablehnt), müssen Sie Secure Boot NICHT deaktivieren "
+                "oder eine dauerhafte Systemeinstellung wie \"Test-Signing\" ändern "
+                "-- das Bestätigen dieser einen UAC-Abfrage genügt."
             ),
             "pt": (
                 "A tela de Imagem de RAM tem dois modos:\n\n"
@@ -796,21 +770,14 @@ HELP_TOPICS = [
                 "Completo: obtém TODA a memória do sistema do computador -- um "
                 "instantâneo completo de todos os programas em execução e do sistema "
                 "operacional naquele momento. Isso requer um acesso de baixo nível "
-                "que o Windows normalmente não permite; o pequeno pedaço de software "
-                "que fornece esse acesso é chamado de \"driver\".\n\n"
-                "Por segurança, o Windows bloqueia por padrão o carregamento de "
-                "drivers não assinados oficialmente (para fins de teste). "
-                "\"Test-signing\" é uma configuração do Windows que remove esse "
-                "bloqueio -- quando ativada, o computador mostra isso com uma marca "
-                "d'água na tela. Essa configuração pode exigir a desativação de outro "
-                "recurso de segurança do computador, o \"Secure Boot\" (uma proteção "
-                "que garante que apenas software confiável/assinado seja executado "
-                "durante a inicialização).\n\n"
-                "Por isso o modo Completo deve ser preparado com antecedência na SUA "
-                "PRÓPRIA máquina, NÃO no computador que você vai examinar -- alterar "
-                "essas configurações em um dispositivo alvo qualquer costuma ser "
-                "impraticável na prática e coloca em risco a integridade da "
-                "evidência."
+                "que o Windows normalmente não permite; por isso aparece uma janela "
+                "de confirmação de Administrador (UAC) ao iniciar, que você precisa "
+                "aprovar.\n\n"
+                "Como o componente de acesso de baixo nível usado está devidamente "
+                "assinado (não é um componente de teste sem assinatura, do tipo que "
+                "o Windows normalmente rejeita), você NÃO precisa desativar o Secure "
+                "Boot nem alterar uma configuração permanente do sistema como o "
+                "\"test-signing\" -- basta aprovar essa única janela UAC."
             ),
             "fr": (
                 "L'écran Image RAM propose deux modes :\n\n"
@@ -819,20 +786,14 @@ HELP_TOPICS = [
                 "Complet : acquiert TOUTE la mémoire système de l'ordinateur -- un "
                 "instantané complet de tous les programmes en cours d'exécution et du "
                 "système d'exploitation à ce moment. Cela nécessite un accès de bas "
-                "niveau que Windows n'autorise normalement pas ; le petit logiciel qui "
-                "fournit cet accès est appelé \"pilote\" (driver).\n\n"
-                "Pour des raisons de sécurité, Windows bloque par défaut le "
-                "chargement de pilotes non signés officiellement (à des fins de "
-                "test). Le \"test-signing\" est un paramètre Windows qui lève ce "
-                "blocage -- une fois activé, l'ordinateur l'indique par un filigrane "
-                "à l'écran. Ce paramètre peut nécessiter la désactivation d'une autre "
-                "fonction de sécurité de l'ordinateur, le \"Secure Boot\" (une "
-                "protection garantissant que seul un logiciel fiable/signé s'exécute "
-                "au démarrage).\n\n"
-                "C'est pourquoi le mode Complet doit être préparé à l'avance sur "
-                "VOTRE PROPRE machine, PAS sur l'ordinateur que vous allez examiner "
-                "-- modifier ces paramètres sur un appareil cible quelconque est "
-                "généralement impraticable et met en péril l'intégrité de la preuve."
+                "niveau que Windows n'autorise normalement pas ; c'est pourquoi une "
+                "invite Administrateur (UAC) unique apparaît au démarrage, que vous "
+                "devez approuver.\n\n"
+                "Comme le composant d'accès bas niveau utilisé est correctement "
+                "signé (pas un composant de test non signé, du type que Windows "
+                "rejette normalement), vous n'avez PAS besoin de désactiver Secure "
+                "Boot ni de modifier un paramètre système permanent comme le "
+                "\"test-signing\" -- approuver cette seule invite UAC suffit."
             ),
         },
     },
