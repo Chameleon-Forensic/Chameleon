@@ -18,7 +18,7 @@ from PySide6.QtCore import Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QColor, QIcon, QPixmap
 from PySide6.QtWidgets import (
     QApplication, QButtonGroup, QComboBox, QFileDialog, QFrame, QHBoxLayout, QLabel,
-    QMainWindow, QPushButton, QScrollArea, QSizePolicy, QSplashScreen,
+    QMainWindow, QPlainTextEdit, QPushButton, QScrollArea, QSizePolicy, QSplashScreen,
     QStackedWidget, QVBoxLayout, QWidget,
 )
 
@@ -2064,6 +2064,14 @@ class ChameleonWindow(QMainWindow):
             card.body.addLayout(row)
             entries[key] = entry
 
+        notes_lbl = QLabel(f"{t('field_case_notes', lang)}:")
+        notes_lbl.setStyleSheet(f"color:{ui.TEXT_MAIN}; font-family:'{ui.FONT_UI}'; font-size:{ui.SIZE_BODY}px;")
+        card.body.addWidget(notes_lbl)
+        notes_entry = QPlainTextEdit()
+        notes_entry.setPlainText(self._last_case.get("case_notes", ""))
+        notes_entry.setFixedHeight(60)
+        card.body.addWidget(notes_entry)
+
         tz_row = QHBoxLayout()
         tz_lbl = QLabel(t("settings_timezone_row_label", lang))
         tz_lbl.setFixedWidth(190)
@@ -2089,6 +2097,7 @@ class ChameleonWindow(QMainWindow):
 
         def _continue():
             case = {k: e.text().strip() for k, e in entries.items()}
+            case["case_notes"] = notes_entry.toPlainText().strip()
             self._last_case = case
             on_continue(case)
 
@@ -2099,6 +2108,7 @@ class ChameleonWindow(QMainWindow):
             self._last_case = {}
             for e in entries.values():
                 e.setText("")
+            notes_entry.setPlainText("")
 
         cont_btn = widgets.PrimaryButton(t("btn_continue", lang))
         cont_btn.clicked.connect(_continue)
@@ -2702,6 +2712,7 @@ class ChameleonWindow(QMainWindow):
             on_back=self._show_home, on_show_help=self._show_help_from_tool,
             initial_case_id=case.get("case_id", ""), initial_examiner=case.get("examiner", ""),
             initial_custodian=case.get("custodian", ""), initial_organization=case.get("organization", ""),
+            initial_case_notes=case.get("case_notes", ""),
             initial_connection_method=connection_method, display_timezone=self.display_timezone,
             lang=self.lang,
         )
@@ -2728,6 +2739,7 @@ class ChameleonWindow(QMainWindow):
             on_back=self._show_home, on_show_help=self._show_help_from_tool,
             initial_case_id=case.get("case_id", ""), initial_examiner=case.get("examiner", ""),
             initial_custodian=case.get("custodian", ""), initial_organization=case.get("organization", ""),
+            initial_case_notes=case.get("case_notes", ""),
             display_timezone=self.display_timezone, lang=self.lang,
         )
         page_layout.addWidget(ram_widget)

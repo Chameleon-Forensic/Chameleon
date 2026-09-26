@@ -28,6 +28,7 @@ import re
 import subprocess
 import sys
 import threading
+import time
 
 from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtWidgets import (
@@ -94,6 +95,20 @@ def _save_recent_host(host, port, username):
             json.dump(entries, f, indent=2, ensure_ascii=False)
     except OSError:
         pass
+
+
+def format_duration_tr(seconds):
+    """Saniyeyi kisa bir TR sure metnine cevirir (45 sn / 2 dk 10 sn / 1 sa 5 dk)
+    -- ram_gui.py'deki AYNI adli yardimci, iki dosya birbirinden bagimsiz
+    calisabildigi icin kod tekrarlanir (bkz. CONTRIBUTING.md)."""
+    saniye = max(0, int(seconds))
+    if saniye < 60:
+        return f"{saniye} sn"
+    dakika, saniye = divmod(saniye, 60)
+    if dakika < 60:
+        return f"{dakika} dk {saniye} sn" if saniye else f"{dakika} dk"
+    saat, dakika = divmod(dakika, 60)
+    return f"{saat} sa {dakika} dk"
 
 
 def build_path_tree(paths):
@@ -365,6 +380,8 @@ class AcquisitionWorker(QThread):
         self._old_stdout = None
         self._yesno_result = False
         self._yesno_event = threading.Event()
+        self._eta_started_at = None
+        self._eta_baslangic_oran = None
 
     def run(self):
         if self.kind == "linux_disk":
@@ -392,13 +409,38 @@ class AcquisitionWorker(QThread):
         self._yesno_event.wait()
         return self._yesno_result
 
+    def _ilerleme_metni(self, oran, ekstra=""):
+        """'İlerleme: %XX (...)' metnine, o anki ÇALIŞTIRMADA ÖLÇÜLEN gerçek
+        hıza göre tahmini kalan süreyi ekler (sabit bir tahmin değil -- RAM/
+        WinPmem hash ilerlemesindeki AYNI yöntem, bkz. ram_gui.py.
+        _emit_hash_progress). oran: 0..1 arasi tamamlanma orani.
+
+        Devam eden (resume) bir islemde oran zaten yuksek bir yerden
+        basliyor olabilir -- bu yuzden BASLANGIC oranini da saklayip sadece
+        BU calistirmada kat edilen mesafeyi hiz hesabina katiyoruz; yoksa
+        resume'un hemen basinda "neredeyse bitti" gibi yanlis bir tahmin
+        cikardi."""
+        simdi = time.monotonic()
+        if self._eta_started_at is None:
+            self._eta_started_at = simdi
+            self._eta_baslangic_oran = oran
+        gecen = simdi - self._eta_started_at
+        taban = f"İlerleme: %{oran * 100:.0f}" + (f" {ekstra}" if ekstra else "")
+        kat_edilen = oran - self._eta_baslangic_oran
+        if kat_edilen > 0.01 and gecen > 1.0:
+            hiz = kat_edilen / gecen
+            kalan_sn = (1 - oran) / hiz if hiz > 0 else 0
+            return f"{taban}, tahmini kalan: {format_duration_tr(kalan_sn)}"
+        return taban
+
     def _new_report(self, engine, method, **kwargs):
         if ForensicReport is None:
             return None
         c = self.ctx
         report = ForensicReport(
             case_id=c["case_id"], examiner=c["examiner"], custodian=c["custodian"],
-            organization=c["organization"], display_timezone=self._display_timezone,
+            organization=c["organization"], case_notes=c.get("case_notes", ""),
+            display_timezone=c.get("display_timezone"),
         )
         report.start(engine=engine, method=method, connection_method=c["conn_method"], **kwargs)
         return report
@@ -644,7 +686,7 @@ class AcquisitionWorker(QThread):
         pct = _parse_progress(text)
         if pct is not None:
             self.progress.emit(pct)
-            self.status.emit(f"İlerleme: %{pct:.1f}")
+            self.status.emit(self._ilerleme_metni(pct / 100))
         self.log.emit(text.rstrip("\n"), None)
 
     # -- Windows tam disk -- gui_v2.py _acquisition_worker_windows ile AYNI --
@@ -670,7 +712,7 @@ class AcquisitionWorker(QThread):
             def ilerleme(done, total):
                 pct = (done * 100 / total) if total else 0
                 self.progress.emit(pct)
-                self.status.emit(f"İlerleme: %{pct:.0f} ({done}/{total} blok)")
+                self.status.emit(self._ilerleme_metni(pct / 100, f"({done}/{total} blok)"))
 
             # bkz. Linux disk kolundaki AYNI kontrol -- Windows tarafinda
             # bu hic yapilmiyordu (gercek bir eksiklik, kullanici bildirdi):
@@ -876,7 +918,7 @@ class AcquisitionWorker(QThread):
             def ilerleme(done, total):
                 pct = (done * 100 / total) if total else 0
                 self.progress.emit(pct)
-                self.status.emit(f"{done}/{total} dosya alındı (%{pct:.0f})")
+                self.status.emit(self._ilerleme_metni(pct / 100, f"({done}/{total} dosya)"))
 
             # bkz. disk imajlama kolundaki AYNI kontrol (docs/roadmap.md
             # madde 0.4) -- uygulama tamamen kapanip acilsa bile disktekilerden
@@ -1120,7 +1162,8 @@ class RemoteBrowseDialog(QDialog):
 # ---------------------------------------------------------------------------
 class ForensicWidget(QWidget):
     def __init__(self, on_back=None, on_show_help=None, initial_case_id="", initial_examiner="",
-                 initial_custodian="", initial_organization="", initial_connection_method=None,
+                 initial_custodian="", initial_organization="", initial_case_notes="",
+                 initial_connection_method=None,
                  display_timezone=None, lang="tr", parent=None):
         """
         initial_connection_method: launcher'dan hangi yontem sayfasi
@@ -1146,6 +1189,7 @@ class ForensicWidget(QWidget):
         self._initial_examiner = initial_examiner
         self._initial_custodian = initial_custodian
         self._initial_organization = initial_organization
+        self._initial_case_notes = initial_case_notes
         self._display_timezone = display_timezone
         self._initial_connection_method = initial_connection_method
         self._method_locked = initial_connection_method is not None
@@ -1226,6 +1270,13 @@ class ForensicWidget(QWidget):
         self.entry_examiner = self._labeled_row(vaka.body, t("field_examiner", self.lang), self._initial_examiner)
         self.entry_custodian = self._labeled_row(vaka.body, t("field_custodian", self.lang), self._initial_custodian)
         self.entry_organization = self._labeled_row(vaka.body, t("field_organization", self.lang), self._initial_organization)
+        notes_lbl = QLabel(f"{t('field_case_notes', self.lang)}:")
+        notes_lbl.setStyleSheet(f"color:{ui.TEXT_MAIN}; font-family:'{ui.FONT_UI}'; font-size:{ui.SIZE_BODY}px;")
+        vaka.body.addWidget(notes_lbl)
+        self.entry_case_notes = QTextEdit()
+        self.entry_case_notes.setPlainText(self._initial_case_notes)
+        self.entry_case_notes.setFixedHeight(60)
+        vaka.body.addWidget(self.entry_case_notes)
         if self.on_back:
             vaka.hide()
         body.addWidget(vaka)
@@ -2074,8 +2125,10 @@ class ForensicWidget(QWidget):
             "examiner": self.entry_examiner.text().strip(),
             "custodian": self.entry_custodian.text().strip(),
             "organization": self.entry_organization.text().strip(),
+            "case_notes": self.entry_case_notes.toPlainText().strip(),
             "conn_method": self.conn_method_value,
             "host": self.entry_host.text().strip(),
+            "display_timezone": self._display_timezone,
         }
 
     # -- Imaj Alma ------------------------------------------------------

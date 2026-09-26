@@ -42,6 +42,22 @@ def test_to_dict_preserves_case_and_integrity_fields():
     assert d["result"]["status"] == "success"
 
 
+def test_case_notes_defaults_empty_and_round_trips():
+    """Vaka notu tamamen istege bagli -- verilmezse bos string, verilirse
+    to_dict()'e ve HTML raporuna aynen gecmeli (coklu satir dahil)."""
+    bos = fr.ForensicReport(case_id="V")
+    assert bos.to_dict()["case"]["case_notes"] == ""
+
+    not_metni = "Cihaz masanin altinda bulundu.\nEkran acikti."
+    report = fr.ForensicReport(case_id="V", case_notes=not_metni)
+    d = report.to_dict()
+    assert d["case"]["case_notes"] == not_metni
+    html = report.to_html()
+    assert "Cihaz masanin altinda bulundu." in html
+    assert "Ekran acikti." in html
+    assert "<br>" in html  # satir sonu HTML'de korunmali (tek satira sikismamali)
+
+
 def test_finish_uses_precomputed_md5_sha1_without_rereading_file(tmp_path):
     """Performans regresyonu: md5_hash/sha1_hash verildiyse, output_path
     HIC diskte olmasa bile finish() dosyayi okumaya CALISMAMALI (ikinci

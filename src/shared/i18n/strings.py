@@ -66,6 +66,7 @@ STRINGS = {
         "field_examiner": "İnceleyen",
         "field_custodian": "Cihaz Sahibi / Yetkili Kişi",
         "field_organization": "Organizasyon",
+        "field_case_notes": "Vaka Notu (isteğe bağlı)",
         "btn_continue": "Devam Et",
         "btn_clear_case": "Temizle",
 
@@ -343,6 +344,7 @@ STRINGS = {
         "field_examiner": "Examiner",
         "field_custodian": "Device Owner / Custodian",
         "field_organization": "Organization",
+        "field_case_notes": "Case Notes (optional)",
         "btn_continue": "Continue",
         "btn_clear_case": "Clear",
 
@@ -616,6 +618,7 @@ STRINGS = {
         "field_examiner": "Examinador",
         "field_custodian": "Propietario del Dispositivo / Custodio",
         "field_organization": "Organización",
+        "field_case_notes": "Notas del Caso (opcional)",
         "btn_continue": "Continuar",
         "btn_clear_case": "Limpiar",
 
@@ -890,6 +893,7 @@ STRINGS = {
         "field_examiner": "Ermittler",
         "field_custodian": "Geräteeigentümer / Verwahrer",
         "field_organization": "Organisation",
+        "field_case_notes": "Fallnotizen (optional)",
         "btn_continue": "Weiter",
         "btn_clear_case": "Leeren",
 
@@ -1165,6 +1169,7 @@ STRINGS = {
         "field_examiner": "Perito",
         "field_custodian": "Proprietário do Dispositivo / Custodiante",
         "field_organization": "Organização",
+        "field_case_notes": "Notas do Caso (opcional)",
         "btn_continue": "Continuar",
         "btn_clear_case": "Limpar",
 
@@ -1439,6 +1444,7 @@ STRINGS = {
         "field_examiner": "Enquêteur",
         "field_custodian": "Propriétaire de l'Appareil / Détenteur",
         "field_organization": "Organisation",
+        "field_case_notes": "Notes de l'Affaire (facultatif)",
         "btn_continue": "Continuer",
         "btn_clear_case": "Effacer",
 

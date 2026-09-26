@@ -53,7 +53,7 @@ def _now_iso():
 
 
 class ForensicReport:
-    def __init__(self, case_id="", examiner="", organization="", custodian="", display_timezone=None):
+    def __init__(self, case_id="", examiner="", organization="", custodian="", case_notes="", display_timezone=None):
         self.case_id = case_id
         self.examiner = examiner
         self.organization = organization
@@ -61,6 +61,10 @@ class ForensicReport:
         # calisanı, cihaz sahibi) -- kim inceledi kadar "cihaz kimden,
         # kimin izniyle alindi" bilgisi de delil zinciri icin onemli.
         self.custodian = custodian
+        # Serbest metin vaka notu (ör. sahada gozlemlenen bir durum) --
+        # TAMAMEN istege bagli, sadece rapora yaziliyor (Vaka Gecmisi'nin
+        # ozet listesine eklenmiyor, orasi kisa/tablo goruntusu icin).
+        self.case_notes = case_notes
         # SADECE report.html'de (insan tarafindan okunan) UTC zaman
         # damgalarinin YANINA eklenen bir yerel saat aciklamasi icin --
         # tz_display.common_timezones()'dan bir IANA anahtari (orn.
@@ -205,6 +209,7 @@ class ForensicReport:
                 "examiner": self.examiner,
                 "organization": self.organization,
                 "custodian": self.custodian,
+                "case_notes": self.case_notes,
             },
             "acquisition": {
                 "target_os": self.target_os,
@@ -289,6 +294,7 @@ class ForensicReport:
     <div>İnceleyen</div><div>{esc(d['case']['examiner']) or '—'}</div>
     <div>Cihaz Sahibi / Yetkili Kişi</div><div>{esc(d['case']['custodian']) or '—'}</div>
     <div>Organizasyon</div><div>{esc(d['case']['organization']) or '—'}</div>
+    <div>Vaka Notu</div><div>{esc(d['case']['case_notes']).replace(chr(10), '<br>') or '—'}</div>
   </div>
 
   <h2>Alma Bilgileri</h2>
@@ -483,6 +489,7 @@ def export_pdf(report_json_path, pdf_path):
             ("İnceleyen", g("case", "examiner")),
             ("Cihaz Sahibi / Yetkili Kişi", g("case", "custodian")),
             ("Organizasyon", g("case", "organization")),
+            ("Vaka Notu", g("case", "case_notes")),
         ]),
 
         Paragraph("Alma Bilgileri", h2),

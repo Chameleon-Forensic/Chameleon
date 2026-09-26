@@ -207,6 +207,44 @@ def test_full_mode_has_no_engine_choice_in_ui(qapp):
         qapp.processEvents()
 
 
+def test_case_notes_field_threads_through_to_ram_worker(qapp, tmp_path, monkeypatch):
+    """Vaka Bilgileri'ndeki serbest metin notu RamWorker'a ve oradan rapora
+    (case_notes) gitmeli (kullanici istegi, bkz. gui_v2.py'deki AYNI)."""
+    fake_exe = tmp_path / "winpmem.exe"
+    fake_exe.write_bytes(b"")
+    monkeypatch.setattr(rg, "WINPMEM_PATH", str(fake_exe))
+
+    widget = rg.RamEngineWidget(lang="en")
+    qapp.processEvents()
+    yakalanan = {}
+
+    class _SahteSinyal:
+        def connect(self, *a, **kw):
+            pass
+
+    class _SahteWorker:
+        def __init__(self, mode, args, out_path, case, examiner, custodian, **kw):
+            yakalanan["case_notes"] = kw.get("case_notes")
+            self.log = _SahteSinyal()
+            self.status = _SahteSinyal()
+            self.report_ready = _SahteSinyal()
+            self.finished = _SahteSinyal()
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr(rg, "RamWorker", _SahteWorker)
+    try:
+        widget.entry_case_notes.setPlainText("RAM alirken sistem yavastı.")
+        widget.radio_full.setChecked(True)
+        widget.entry_out.setText(str(tmp_path / "out.raw"))
+        widget._start()
+        assert yakalanan["case_notes"] == "RAM alirken sistem yavastı."
+    finally:
+        widget.deleteLater()
+        qapp.processEvents()
+
+
 def test_start_uses_winpmem_path_and_acquire_args(qapp, tmp_path, monkeypatch):
     """_start(), Full RAM seciliyken dogru exe/komut ile RamWorker('full', ...)
     olusturmali -- gercekten calistirmadan (worker.start yerine sahte kontrol)."""

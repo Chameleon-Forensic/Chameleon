@@ -11,6 +11,7 @@ sonra `pytest tests/test_gui_smoke.py` ile TEK KOMUTLA tekrar calistirilabilir.
 import pytest
 
 import chameleon_gui
+from strings import t
 
 
 LANGUAGES = ["tr", "en", "es", "de", "pt", "fr"]
@@ -86,6 +87,32 @@ def test_home_has_no_recent_case_card_when_history_empty(window, qapp):
     window._show_home()
     qapp.processEvents()
     assert window._recent_case_card() is None
+
+
+def test_case_info_notes_field_round_trips_and_clears(window, qapp):
+    """Vaka Bilgileri'ndeki serbest metin notu: Devam Et ile toplanan case
+    sozlugune girmeli, Temizle ile bosalmali (kullanici istegi)."""
+    from PySide6.QtWidgets import QPlainTextEdit
+    from chameleon_gui import widgets
+
+    yakalanan = {}
+    window._show_case_info(lambda case: yakalanan.update(case))
+    qapp.processEvents()
+    notes_widgets = window.findChildren(QPlainTextEdit)
+    assert notes_widgets, "vaka notu alani bulunamadi"
+    notes_widgets[0].setPlainText("Test notu.")
+
+    devam_btn = next(b for b in window.findChildren(widgets.PrimaryButton) if b.text() == t("btn_continue", window.lang))
+    devam_btn.click()
+    assert yakalanan.get("case_notes") == "Test notu."
+
+    # Temizle -- alan bosalmali (kullanici istegi)
+    window._show_case_info(lambda case: None)
+    qapp.processEvents()
+    window.findChildren(QPlainTextEdit)[0].setPlainText("Silinecek not.")
+    clear_btn = next(b for b in window.findChildren(widgets.SecondaryButton) if b.text() == t("btn_clear_case", window.lang))
+    clear_btn.click()
+    assert window.findChildren(QPlainTextEdit)[0].toPlainText() == ""
 
 
 def test_home_shows_recent_case_card_with_newest_entry(window, qapp, isolated_history):

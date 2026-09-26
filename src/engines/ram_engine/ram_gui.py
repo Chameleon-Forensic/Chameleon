@@ -150,7 +150,7 @@ class RamWorker(QThread):
     report_ready = Signal(object, str)  # (ForensicReport, report_path)
 
     def __init__(self, mode, args, out_path, case, examiner, custodian, organization="",
-                 display_timezone=None, process_label=None, parent=None):
+                 case_notes="", display_timezone=None, process_label=None, parent=None):
         super().__init__(parent)
         self.mode = mode
         self.args = args
@@ -159,6 +159,7 @@ class RamWorker(QThread):
         self.examiner = examiner
         self.custodian = custodian
         self.organization = organization
+        self.case_notes = case_notes
         self.display_timezone = display_timezone
         self.process_label = process_label
         self._hash_started_at = None
@@ -175,7 +176,8 @@ class RamWorker(QThread):
             return None
         report = ForensicReport(
             case_id=self.case, examiner=self.examiner, custodian=self.custodian,
-            organization=self.organization, display_timezone=self.display_timezone,
+            organization=self.organization, case_notes=self.case_notes,
+            display_timezone=self.display_timezone,
         )
         report.start(
             engine="ram_engine", method=method, target_os="windows", target_host="localhost",
@@ -412,7 +414,8 @@ class RamWorker(QThread):
 
 class RamEngineWidget(QWidget):
     def __init__(self, on_back=None, on_show_help=None, initial_case_id="", initial_examiner="",
-                 initial_custodian="", initial_organization="", display_timezone=None, lang="tr", parent=None):
+                 initial_custodian="", initial_organization="", initial_case_notes="",
+                 display_timezone=None, lang="tr", parent=None):
         super().__init__(parent)
         self.on_back = on_back
         # bkz. gui_v2.py'deki ForensicWidget.on_show_help -- ayni desen:
@@ -428,11 +431,11 @@ class RamEngineWidget(QWidget):
         # deki _last_report ile AYNI desen/isim, bkz. o dosyadaki aciklama.
         self._last_report = None
         self._display_timezone = display_timezone
-        self._build_ui(initial_case_id, initial_examiner, initial_custodian, initial_organization)
+        self._build_ui(initial_case_id, initial_examiner, initial_custodian, initial_organization, initial_case_notes)
         self._refresh_processes()
 
     # -- UI ------------------------------------------------------------
-    def _build_ui(self, initial_case_id, initial_examiner, initial_custodian, initial_organization=""):
+    def _build_ui(self, initial_case_id, initial_examiner, initial_custodian, initial_organization="", initial_case_notes=""):
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
@@ -483,6 +486,13 @@ class RamEngineWidget(QWidget):
         self.entry_examiner = self._labeled_input(vaka.body, t("field_examiner", self.lang), initial_examiner)
         self.entry_custodian = self._labeled_input(vaka.body, t("field_custodian", self.lang), initial_custodian)
         self.entry_organization = self._labeled_input(vaka.body, t("field_organization", self.lang), initial_organization)
+        notes_lbl = QLabel(f"{t('field_case_notes', self.lang)}:")
+        notes_lbl.setStyleSheet(f"color:{ui.TEXT_MAIN}; font-family:'{ui.FONT_UI}'; font-size:{ui.SIZE_BODY}px;")
+        vaka.body.addWidget(notes_lbl)
+        self.entry_case_notes = QPlainTextEdit()
+        self.entry_case_notes.setPlainText(initial_case_notes)
+        self.entry_case_notes.setFixedHeight(60)
+        vaka.body.addWidget(self.entry_case_notes)
         if self.on_back:
             vaka.hide()
         layout.addWidget(vaka)
@@ -703,6 +713,7 @@ class RamEngineWidget(QWidget):
         examiner = self.entry_examiner.text().strip()
         custodian = self.entry_custodian.text().strip()
         organization = self.entry_organization.text().strip()
+        case_notes = self.entry_case_notes.toPlainText().strip()
 
         self.btn_start.setEnabled(False)
         self._set_status(t("tool_running_status", self.lang))
@@ -720,13 +731,15 @@ class RamEngineWidget(QWidget):
             args = [CLI_PATH, "process", "--pid", pid, "--output", out_path]
             self.worker = RamWorker(
                 "process", args, out_path, case, examiner, custodian,
-                organization=organization, display_timezone=self._display_timezone, process_label=secim,
+                organization=organization, case_notes=case_notes,
+                display_timezone=self._display_timezone, process_label=secim,
             )
         else:
             args = [WINPMEM_PATH, "acquire", out_path]
             self.worker = RamWorker(
                 "full", args, out_path, case, examiner, custodian,
-                organization=organization, display_timezone=self._display_timezone,
+                organization=organization, case_notes=case_notes,
+                display_timezone=self._display_timezone,
             )
 
         self.worker.log.connect(self._log)
