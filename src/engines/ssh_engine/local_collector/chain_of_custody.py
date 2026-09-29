@@ -62,6 +62,12 @@ EVENT_IMAGE_COMPRESSED = "IMAGE_COMPRESSED"
 # NEDEN olmadigi delil zincirinde acikca gorunsun diye tek bir ozet olarak
 # kaydedilir; tam liste manifest_files.json'daki "excluded" alanindadir.
 EVENT_LOGICAL_EXCLUSIONS = "LOGICAL_EXCLUSIONS"
+# Operator "Durdur" ile bir alma islemini bilerek yarim biraktiginda
+# (bkz. gui_v2.py "Durdur" butonu) -- EXAM_ERROR (beklenmeyen hata) ya da
+# CONNECTION_LOST (baglanti sorunu) ile KARISMASIN diye ayri bir olay:
+# rapor okuyan kisi bunun bir ARIZA degil, operatorun kendi karari
+# oldugunu acikca gorebilsin.
+EVENT_EXAM_STOPPED = "EXAM_STOPPED"
 # Yerel mod (SSH yok): arac incelenen bilgisayarin KENDISINDE calisiyor.
 # Kaynagin canli sistem diski olup olmadigi ve ciktinin nereye yazildigi
 # delil zincirinde acikca gorunsun diye alma baslarken bir kez kaydedilir.

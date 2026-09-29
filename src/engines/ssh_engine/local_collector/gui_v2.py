@@ -382,6 +382,17 @@ class AcquisitionWorker(QThread):
         self._yesno_event = threading.Event()
         self._eta_started_at = None
         self._eta_baslangic_oran = None
+        self._durdur_bayragi = threading.Event()
+
+    def request_stop(self):
+        """Ana thread'den (GUI) cagirilir -- worker'a 'bir sonraki uygun
+        noktada dur' sinyali verir. Su an islenmekte olan blok/dosya YARIDA
+        KESILMEZ (asla yarim yazilmis bir sey 'alindi' sayilmaz); bir
+        sonraki blok/dosya BASLAMADAN once devreye girer. Su ana kadarki
+        ilerleme (kalici manifest dahil) korunur, daha sonra ayni hedef
+        secilince devam teklif edilir (bkz. acquire_disk_image/
+        acquire_remote_tree'deki should_stop parametresi)."""
+        self._durdur_bayragi.set()
 
     def run(self):
         if self.kind == "linux_disk":
@@ -536,10 +547,10 @@ class AcquisitionWorker(QThread):
                 apply_write_blocker=apply_wb,
                 total_blocks=resume_state["total_blocks"] if resume_state else None,
                 start_block=start_block, resume_state=resume_state, manifest_path=manifest_path,
-                host=c["host"],
+                host=c["host"], should_stop=self._durdur_bayragi.is_set,
             )
 
-            while sonuc is not None and "resume_from" in sonuc:
+            while sonuc is not None and "resume_from" in sonuc and not sonuc.get("user_stopped"):
                 tekrar = self._ask_yesno_blocking(
                     "Bağlantı Koptu",
                     f"Bağlantı blok {sonuc['resume_from']}'de kesildi.\nTekrar bağlanıp devam edilsin mi?",
@@ -557,7 +568,7 @@ class AcquisitionWorker(QThread):
                     apply_write_blocker=apply_wb, total_blocks=sonuc["total_blocks"],
                     start_block=sonuc["resume_from"], resume_state=sonuc,
                     manifest_path=sonuc.get("manifest_path"),
-                    host=c["host"],
+                    host=c["host"], should_stop=self._durdur_bayragi.is_set,
                 )
 
             if sonuc is None:
@@ -568,15 +579,25 @@ class AcquisitionWorker(QThread):
                 return
 
             if "resume_from" in sonuc:
+                durduruldu_mu = sonuc.get("user_stopped", False)
                 if report:
                     report.finish(
                         status="partial", output_path=out_path,
                         chunk_size_bytes=sonuc.get("block_size_mb", 0) * 1024 * 1024,
                         chunk_count=len(sonuc.get("acquired_blocks", [])),
-                        failed_items=[f"resume_from={sonuc['resume_from']}"],
+                        failed_items=["Kullanıcı tarafından durduruldu"] if durduruldu_mu
+                        else [f"resume_from={sonuc['resume_from']}"],
                     )
                     self._save_report(report, sonuc.get("output_dir") or os.path.dirname(out_path) or ".")
-                self.log.emit("[BİLGİ] İşlem yarım kaldı. Daha sonra aynı diski seçip devam edebilirsiniz.", None)
+                if durduruldu_mu:
+                    self.status.emit("Durduruldu.")
+                    self.log.emit(
+                        f"[BİLGİ] İşlem durduruldu ({len(sonuc.get('acquired_blocks', []))}/"
+                        f"{sonuc.get('total_blocks', '?')} blok). Manifest korunuyor, aynı diski seçip devam edebilirsiniz.",
+                        None,
+                    )
+                else:
+                    self.log.emit("[BİLGİ] İşlem yarım kaldı. Daha sonra aynı diski seçip devam edebilirsiniz.", None)
                 return
 
             segments = None
@@ -779,10 +800,10 @@ class AcquisitionWorker(QThread):
                 apply_write_blocker=apply_wb,
                 total_blocks=resume_state0["total_blocks"] if resume_state0 else None,
                 start_block=start_block0, resume_state=resume_state0, manifest_path=manifest_path,
-                progress_callback=ilerleme, host=c["host"],
+                progress_callback=ilerleme, host=c["host"], should_stop=self._durdur_bayragi.is_set,
             )
 
-            while sonuc is not None and "resume_from" in sonuc:
+            while sonuc is not None and "resume_from" in sonuc and not sonuc.get("user_stopped"):
                 tekrar = self._ask_yesno_blocking(
                     "Bağlantı Koptu",
                     f"Bağlantı blok {sonuc['resume_from']}'de kesildi.\nTekrar bağlanıp devam edilsin mi?",
@@ -798,7 +819,7 @@ class AcquisitionWorker(QThread):
                     block_size_mb=sonuc.get("block_size_mb", block_size_mb), apply_write_blocker=False,
                     total_blocks=sonuc["total_blocks"], start_block=sonuc["resume_from"],
                     resume_state=sonuc, manifest_path=sonuc.get("manifest_path"), progress_callback=ilerleme,
-                    host=c["host"],
+                    host=c["host"], should_stop=self._durdur_bayragi.is_set,
                 )
 
             if sonuc is None:
@@ -809,15 +830,25 @@ class AcquisitionWorker(QThread):
                 return
 
             if "resume_from" in sonuc:
+                durduruldu_mu = sonuc.get("user_stopped", False)
                 if report:
                     report.finish(
                         status="partial", output_path=out_path,
                         chunk_size_bytes=sonuc.get("block_size_mb", 0) * 1024 * 1024,
                         chunk_count=len(sonuc.get("acquired_blocks", [])),
-                        failed_items=[f"resume_from={sonuc['resume_from']}"],
+                        failed_items=["Kullanıcı tarafından durduruldu"] if durduruldu_mu
+                        else [f"resume_from={sonuc['resume_from']}"],
                     )
                     self._save_report(report, sonuc.get("output_dir") or os.path.dirname(out_path) or ".")
-                self.log.emit("[BİLGİ] İşlem yarım kaldı. Daha sonra aynı diski seçip devam edebilirsiniz.", None)
+                if durduruldu_mu:
+                    self.status.emit("Durduruldu.")
+                    self.log.emit(
+                        f"[BİLGİ] İşlem durduruldu ({len(sonuc.get('acquired_blocks', []))}/"
+                        f"{sonuc.get('total_blocks', '?')} blok). Manifest korunuyor, aynı diski seçip devam edebilirsiniz.",
+                        None,
+                    )
+                else:
+                    self.log.emit("[BİLGİ] İşlem yarım kaldı. Daha sonra aynı diski seçip devam edebilirsiniz.", None)
                 return
 
             self.log.emit("\n[+] Bloklar birleştiriliyor...", "info")
@@ -948,12 +979,14 @@ class AcquisitionWorker(QThread):
                 manifest = alici(
                     self.ssh, remote_path, out_dir, progress_callback=ilerleme,
                     manifest_path=tree_manifest_path, resume_state=tree_resume_state, host=c["host"],
+                    should_stop=self._durdur_bayragi.is_set,
                 )
             else:
                 alici = acquire_logical_image if logical else acquire_remote_tree
                 manifest = alici(
                     self.ssh, remote_path, out_dir, password=password, progress_callback=ilerleme,
                     manifest_path=tree_manifest_path, resume_state=tree_resume_state, host=c["host"],
+                    should_stop=self._durdur_bayragi.is_set,
                 )
 
             if manifest is None:
@@ -964,9 +997,13 @@ class AcquisitionWorker(QThread):
                 self.status.emit("Bulunamadı.")
                 return
 
+            durduruldu_mu = manifest.get("stopped", False)
             basarili = len(manifest["acquired"])
             basarisiz = len(manifest["failed"])
-            self.log.emit(f"[BAŞARILI] {basarili}/{manifest['total_files']} dosya alındı ve doğrulandı.", None)
+            if durduruldu_mu:
+                self.log.emit(f"[BİLGİ] Durduruldu -- {basarili}/{manifest['total_files']} dosya alındı ve doğrulandı.", None)
+            else:
+                self.log.emit(f"[BAŞARILI] {basarili}/{manifest['total_files']} dosya alındı ve doğrulandı.", None)
             # Mantiksal imajda her basarisiz dosya icin sebep (izin yok/kilitli...)
             # da var; klasor modunda bos kalir.
             sebepler = manifest.get("failed_reasons", {})
@@ -984,7 +1021,13 @@ class AcquisitionWorker(QThread):
                     "(kilitli/sürekli değişen sistem öğeleri) — tam liste manifest'te.", "info",
                 )
             self.log.emit(f"[+] Manifest: {os.path.join(out_dir, 'manifest_files.json')}", "info")
-            self.status.emit("Dosya/klasör alma tamamlandı.")
+            if durduruldu_mu:
+                self.status.emit("Durduruldu.")
+                self.log.emit(
+                    "[BİLGİ] Manifest korunuyor, aynı hedefi seçip devam edebilirsiniz.", None,
+                )
+            else:
+                self.status.emit("Dosya/klasör alma tamamlandı.")
             self.progress.emit(100)
 
             if report:
@@ -992,8 +1035,10 @@ class AcquisitionWorker(QThread):
                     os.path.getsize(a["local_path"]) for a in manifest["acquired"]
                     if os.path.exists(a["local_path"])
                 )
+                if durduruldu_mu:
+                    basarisiz_satirlari = ["Kullanıcı tarafından durduruldu"] + basarisiz_satirlari
                 report.finish(
-                    status="success" if not manifest["failed"] else "partial",
+                    status="partial" if (durduruldu_mu or manifest["failed"]) else "success",
                     output_path=out_dir, total_bytes=toplam_bayt,
                     chunk_count=manifest["total_files"], failed_items=basarisiz_satirlari,
                 )
@@ -1567,6 +1612,10 @@ class ForensicWidget(QWidget):
         self.btn_acquire = widgets.PrimaryButton(t("tool_btn_start_acquisition", self.lang))
         self.btn_acquire.clicked.connect(self._start_acquisition)
         btn_row.addWidget(self.btn_acquire)
+        self.btn_stop = widgets.SecondaryButton(t("tool_btn_stop_acquisition", self.lang))
+        self.btn_stop.clicked.connect(self._stop_acquisition)
+        self.btn_stop.hide()
+        btn_row.addWidget(self.btn_stop)
         verify_btn = widgets.SecondaryButton(t("tool_btn_verify_image", self.lang))
         verify_btn.clicked.connect(self._verify_image)
         btn_row.addWidget(verify_btn)
@@ -2223,6 +2272,8 @@ class ForensicWidget(QWidget):
 
     def _begin_acquisition(self, kind, ctx, header_line):
         self.btn_acquire.setEnabled(False)
+        self.btn_stop.setEnabled(True)
+        self.btn_stop.show()
         self._set_progress(0)
         self._set_status(t("tool_status_acquisition_starting", self.lang))
         self._log(f"\n{'=' * 50}", "info")
@@ -2236,8 +2287,25 @@ class ForensicWidget(QWidget):
         self.acq_worker.report_ready.connect(self._show_report_summary)
         self.acq_worker.ask_verify.connect(self._on_ask_verify)
         self.acq_worker.ask_yesno.connect(self._on_worker_ask_yesno)
-        self.acq_worker.finished.connect(lambda: self.btn_acquire.setEnabled(True))
+        self.acq_worker.finished.connect(self._on_acquisition_finished)
         self.acq_worker.start()
+
+    def _on_acquisition_finished(self):
+        self.btn_acquire.setEnabled(True)
+        self.btn_stop.hide()
+
+    def _stop_acquisition(self):
+        """'Durdur' butonu -- su an islenmekte olan blok/dosya yarida
+        kesilmez, worker bir sonraki uygun noktada temiz sekilde durur
+        (bkz. AcquisitionWorker.request_stop). Yanlislikla tiklamaya
+        karsi onay isteniyor -- bu, kismen alinmis bir imaji "iptal"
+        degil "duraklat" olarak gormek gerektigini de hatirlatir."""
+        if self.acq_worker is None:
+            return
+        if not self._show_yesno_dialog(t("tool_stop_confirm_title", self.lang), t("tool_stop_confirm_msg", self.lang)):
+            return
+        self.btn_stop.setEnabled(False)
+        self.acq_worker.request_stop()
 
     def _on_worker_ask_yesno(self, title, msg):
         """

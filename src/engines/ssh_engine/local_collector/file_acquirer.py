@@ -283,7 +283,7 @@ def _diagnose_failure(ssh, remote_path, password=None):
 
 def acquire_remote_tree(ssh, remote_root, output_dir, password=None, progress_callback=None,
                          manifest_path=None, resume_state=None, host=None,
-                         file_lister=None, manifest_every=1, mode="file"):
+                         file_lister=None, manifest_every=1, mode="file", should_stop=None):
     """
     file_lister/manifest_every/mode: mantiksal imaj (docs/roadmap.md madde
     0.5) icin. file_lister(ssh, root, password) -> (dosyalar, onceden_
@@ -311,8 +311,14 @@ def acquire_remote_tree(ssh, remote_root, output_dir, password=None, progress_ca
     icindeki manifest_files.json'dan (islem SONUCUNUN kalici ozeti, resume
     icin degil, her zaman ayrica yazilir) FARKLI bir dosyadir.
 
+    should_stop: verilirse, her dosyadan ONCE (o an islenmekte olan dosya
+    tamamlanmadan asla kesilmez) cagirilir; True donerse dongu erken
+    biter, o ana kadarki ilerleme (kalici manifest dahil) korunur --
+    "Yarim Kalanlar"da normal sekilde devam teklif edilir (bkz. gui_v2.py
+    "Durdur" butonu).
+
     Donus: manifest dict (remote_root, total_files, acquired, failed,
-    acquired_at) ya da yol bulunamadiysa None.
+    acquired_at, stopped) ya da yol bulunamadiysa None.
     """
     kind = remote_path_kind(ssh, remote_root, password=password)
     if kind is None:
@@ -378,7 +384,18 @@ def acquire_remote_tree(ssh, remote_root, output_dir, password=None, progress_ca
             "started_at_utc": started_at_utc,
         })
 
+    durduruldu = False
     for i, uzak_dosya in enumerate(dosyalar, start=1):
+        if should_stop and should_stop():
+            durduruldu = True
+            _yaz_kalici_manifest()  # o ana kadarki ilerlemeyi kesin diske yaz
+            coc.log_event(
+                coc.EVENT_EXAM_STOPPED,
+                f"Dosya/klasor alma kullanici tarafindan durduruldu: {remote_root} "
+                f"({len(acquired_files)}/{toplam})",
+            )
+            break
+
         if uzak_dosya in onceden_alinan:
             if progress_callback:
                 progress_callback(i + n_pre, toplam)
@@ -413,18 +430,22 @@ def acquire_remote_tree(ssh, remote_root, output_dir, password=None, progress_ca
         if progress_callback:
             progress_callback(i + n_pre, toplam)
 
-    coc.log_event(
-        coc.EVENT_EXAM_END,
-        f"Dosya/klasor alma tamamlandi: {len(sonuclar)}/{toplam} basarili, "
-        f"{len(basarisiz)} basarisiz",
-    )
+    if not durduruldu:
+        coc.log_event(
+            coc.EVENT_EXAM_END,
+            f"Dosya/klasor alma tamamlandi: {len(sonuclar)}/{toplam} basarili, "
+            f"{len(basarisiz)} basarisiz",
+        )
 
     tamamlandi_temiz = not basarisiz and len(acquired_files) == toplam
     # Mantiksal imajda (mode != "file") bazi dosyalar KALICI olarak alinamaz
     # (kilitli/izinsiz) -- islem BITTIYSE manifest yine kaldirilir, aksi
     # halde "Yarim Kalanlar"da sonsuza kadar duran bir kayit olurdu; basarisiz
-    # dosyalar zaten manifest_files.json'da sebepleriyle listeli.
-    if tamamlandi_temiz or mode != "file":
+    # dosyalar zaten manifest_files.json'da sebepleriyle listeli. Kullanici
+    # BILEREK durdurduysa (durduruldu=True) bu kural gecerli DEGIL -- o
+    # zaman mode ne olursa olsun manifest KORUNUR, aksi halde mantiksal
+    # imajda "Durdur"a basmak devam etme ihtimalini tamamen yok ederdi.
+    if not durduruldu and (tamamlandi_temiz or mode != "file"):
         # Tum dosyalar eksiksiz alindi -- yarim kalmis bir islem olarak
         # tekrar sunulmamasi icin kalici manifest kaldirilir.
         delete_manifest(manifest_path)
@@ -438,6 +459,7 @@ def acquire_remote_tree(ssh, remote_root, output_dir, password=None, progress_ca
         "failed_reasons": failed_reasons,
         "excluded": dislanan,
         "acquired_at": datetime.now(timezone.utc).isoformat(),
+        "stopped": durduruldu,
     }
 
     os.makedirs(output_dir, exist_ok=True)
@@ -454,7 +476,7 @@ LOGICAL_MANIFEST_EVERY = 100
 
 
 def acquire_logical_image(ssh, remote_root, output_dir, password=None, progress_callback=None,
-                           manifest_path=None, resume_state=None, host=None):
+                           manifest_path=None, resume_state=None, host=None, should_stop=None):
     """Mantiksal imaj (Linux): remote_root'un ait oldugu hacmin (volume)
     var olan TUM dosyalari -- bkz. list_logical_files. Silinmis veri ve bos
     alan alinmaz (o, Tam Disk modunun isi)."""
@@ -462,4 +484,5 @@ def acquire_logical_image(ssh, remote_root, output_dir, password=None, progress_
         ssh, remote_root, output_dir, password=password, progress_callback=progress_callback,
         manifest_path=manifest_path, resume_state=resume_state, host=host,
         file_lister=list_logical_files, manifest_every=LOGICAL_MANIFEST_EVERY, mode="logical",
+        should_stop=should_stop,
     )

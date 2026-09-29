@@ -460,6 +460,7 @@ def acquire_disk_image(
     resume_state=None,
     manifest_path=None,
     host=None,
+    should_stop=None,
 ):
     """
     Uzak diski blok blok cekip her bloğu diske yazmadan once dogrular.
@@ -490,6 +491,13 @@ def acquire_disk_image(
 
     Write-block basarisiz olursa (veya disk boyutu okunamazsa) None doner
     ve islem hic baslamaz — delil butunlugu ilk adimda garanti edilir.
+
+    should_stop: verilirse, her blok denemesinden ONCE (hic yarim blok
+    yazilmadan) cagirilir; True donerse islem baglanti koptugundaki ile
+    AYNI "resume_from" seklinde durur -- tek fark donen sozlukte
+    "user_stopped": True olmasi (GUI bunu "baglanti koptu, tekrar
+    baglanilsin mi?" diye SORMAMASI, "durduruldu" diye net gostermesi
+    icin kullanir; bkz. gui_v2.py "Durdur" butonu).
     """
     os.makedirs(output_dir, exist_ok=True)
 
@@ -596,6 +604,24 @@ def acquire_disk_image(
         block_paths = {}
 
     for block_no in range(start_block, total_blocks):
+        if should_stop and should_stop():
+            coc.log_event(
+                coc.EVENT_EXAM_STOPPED,
+                f"Imaj alma kullanici tarafindan durduruldu, blok {block_no}'da "
+                f"(kaldigi yerden devam icin start_block={block_no}): {disk_path}",
+            )
+            return {
+                "total_blocks": total_blocks,
+                "acquired_blocks": acquired_blocks,
+                "failed_blocks": failed_blocks,
+                "block_paths": block_paths,
+                "block_size_mb": block_size_mb,
+                "output_dir": output_dir,
+                "manifest_path": manifest_path,
+                "resume_from": block_no,
+                "user_stopped": True,
+            }
+
         retry_count = 0
         block_ok = False
 

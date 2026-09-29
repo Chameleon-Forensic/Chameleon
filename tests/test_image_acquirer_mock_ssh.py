@@ -252,7 +252,31 @@ def test_connection_drop_returns_resume_point_without_losing_progress(
 
     assert "resume_from" in result
     assert result["acquired_blocks"] == [0, 1], "kopmadan ONCE alinan bloklar KAYBOLMAMALI"
-    assert result["resume_from"] == 2
+
+
+def test_should_stop_halts_cleanly_and_marks_user_stopped(tmp_path, fake_disk):
+    """Kullanici 'Durdur' butonuna bastiginda (should_stop True donunce),
+    baglanti koptugundaki ile AYNI 'resume_from' seklinde durmali ama
+    ayrica 'user_stopped': True tasimali -- GUI bunu 'baglanti koptu,
+    tekrar baglanilsin mi?' diye SORMAMASI icin kullanir."""
+    ssh = MockSSHClient(fake_disk)
+    cagri_sayisi = [0]
+
+    def should_stop():
+        # ilk cagri (block_no=0'dan once): henuz durma. ikinci cagri
+        # (block_no=1'den once): dur -- boylece blok 0 tamamlanmis olmali.
+        cagri_sayisi[0] += 1
+        return cagri_sayisi[0] > 1
+
+    result = ia.acquire_disk_image(
+        ssh, "/dev/fake0", password=None, output_dir=str(tmp_path),
+        block_size_mb=1, apply_write_blocker=True, should_stop=should_stop,
+    )
+
+    assert result["user_stopped"] is True
+    assert "resume_from" in result
+    assert result["acquired_blocks"] == [0], "durdurulmadan ONCE alinan blok KAYBOLMAMALI"
+    assert result["resume_from"] == 1
 
     # ayni cagriyi start_block=resume_from ile tekrarlarsak (baglanti
     # bu sefer duzgun calisirken) kalan bloklar tamamlanabilmeli

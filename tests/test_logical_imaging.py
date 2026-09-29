@@ -190,6 +190,32 @@ def test_linux_logical_resume_skips_already_acquired(tmp_path):
     assert len(manifest["acquired"]) == 3
 
 
+def test_logical_should_stop_halts_early_and_preserves_manifest_for_resume(tmp_path):
+    """Kullanici 'Durdur'a bastiginda (should_stop True donunce), o ana
+    kadar alinanlar KAYBOLMAMALI ve -- mantiksal imajda normalde islem
+    'bittiginde' kalici manifest silinse bile -- BILEREK durdurulunca
+    manifest KORUNMALI (aksi halde 'Durdur' mantiksal imajda devam etme
+    ihtimalini yok ederdi)."""
+    fs = FakeLinuxFS({"/d/a": b"1", "/d/b": b"2", "/d/c": b"3"})
+    cagri_sayisi = [0]
+
+    def should_stop():
+        cagri_sayisi[0] += 1
+        return cagri_sayisi[0] > 1  # ilk dosyadan (a) sonra, ikincisinden (b) once dur
+
+    manifest = fa.acquire_logical_image(fs, "/d", str(tmp_path / "out"), should_stop=should_stop)
+
+    assert manifest["stopped"] is True
+    assert len(manifest["acquired"]) == 1
+    assert set(fs.dd_calls) == {"/d/a"}, "durdurulduktan sonraki dosyalar hic cekilmemeli"
+
+    # Kalici manifest (resume icin) hala diskte olmali -- silinmemis.
+    kalanlar = ia.list_incomplete_tree_manifests()
+    assert len(kalanlar) == 1
+    _, veri = kalanlar[0]
+    assert veri["acquired_files"] == ["/d/a"]
+
+
 def test_incomplete_manifest_lookup_separates_logical_from_folder_mode():
     """Ayni kok yol ("/") hem klasor hem mantiksal imajda secilebilir --
     yarim kalan biri digerinin devam teklifine karismamali. 'mode' alani

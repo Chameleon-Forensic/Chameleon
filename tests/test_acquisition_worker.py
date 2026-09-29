@@ -79,6 +79,52 @@ def test_new_report_builds_real_report_with_display_timezone(qapp):
     assert d["tool"]["method"] == "disk"
 
 
+def test_stop_button_appears_only_while_acquisition_runs(qapp, tmp_path):
+    """Durdur butonu baslangicta gizli, alma baslayinca gorunur, worker
+    bitince tekrar gizlenir (kullanici istegi). ssh=None oldugu icin
+    gercek worker hizlica (baglanti yok) hata verip biter -- burada sadece
+    buton gorunurlugu ilgilendiriyor, alma sonucunu degil."""
+    widget = gui_v2.ForensicWidget(lang="tr")
+    qapp.processEvents()
+    try:
+        assert widget.btn_stop.isHidden()
+        widget._begin_acquisition("file", {
+            "case_id": "", "examiner": "", "custodian": "", "organization": "",
+            "conn_method": "direct", "host": "h", "remote_path": "/tmp/x",
+            "out_dir": str(tmp_path), "password": None, "target_os": "linux",
+            "logical": False,
+        }, "test")
+        qapp.processEvents()
+        assert not widget.btn_stop.isHidden()
+        widget.acq_worker.wait(3000)
+        qapp.processEvents()
+        assert widget.btn_stop.isHidden()
+    finally:
+        widget.deleteLater()
+        qapp.processEvents()
+
+
+def test_stop_acquisition_asks_confirmation_then_requests_stop(qapp, monkeypatch):
+    widget = gui_v2.ForensicWidget(lang="tr")
+    qapp.processEvents()
+    try:
+        widget.acq_worker = gui_v2.AcquisitionWorker("file", None, {
+            "case_id": "", "examiner": "", "custodian": "", "organization": "",
+            "conn_method": "direct", "host": "h",
+        })
+
+        monkeypatch.setattr(widget, "_show_yesno_dialog", lambda *_a: False)
+        widget._stop_acquisition()
+        assert not widget.acq_worker._durdur_bayragi.is_set(), "onay verilmezse durdurulmamali"
+
+        monkeypatch.setattr(widget, "_show_yesno_dialog", lambda *_a: True)
+        widget._stop_acquisition()
+        assert widget.acq_worker._durdur_bayragi.is_set()
+    finally:
+        widget.deleteLater()
+        qapp.processEvents()
+
+
 def test_case_notes_field_threads_through_to_report(qapp):
     """Vaka Bilgileri'ndeki serbest metin notu, ctx uzerinden worker'a ve
     oradan rapora (case_notes) gitmeli (kullanici istegi)."""

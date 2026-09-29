@@ -187,6 +187,7 @@ def acquire_disk_image_windows(
     manifest_path=None,
     progress_callback=None,
     host=None,
+    should_stop=None,
 ):
     """
     image_acquirer.acquire_disk_image ile ayni akis (write-block -> her
@@ -276,6 +277,24 @@ def acquire_disk_image_windows(
         block_paths = {}
 
     for block_no in range(start_block, total_blocks):
+        if should_stop and should_stop():
+            coc.log_event(
+                coc.EVENT_EXAM_STOPPED,
+                f"Imaj alma kullanici tarafindan durduruldu, blok {block_no}'da "
+                f"(Windows, kaldigi yerden devam icin start_block={block_no})",
+            )
+            return {
+                "total_blocks": total_blocks,
+                "acquired_blocks": acquired_blocks,
+                "failed_blocks": failed_blocks,
+                "block_paths": block_paths,
+                "block_size_mb": block_size_mb,
+                "output_dir": output_dir,
+                "manifest_path": manifest_path,
+                "resume_from": block_no,
+                "user_stopped": True,
+            }
+
         retry_count = 0
         block_ok = False
 
@@ -697,11 +716,12 @@ def list_logical_files_windows(ssh, remote_root, password=None):
 
 def acquire_remote_tree_windows(ssh, remote_root, output_dir, progress_callback=None,
                                  manifest_path=None, resume_state=None, host=None,
-                                 file_lister=None, manifest_every=1, mode="file"):
+                                 file_lister=None, manifest_every=1, mode="file", should_stop=None):
     """file_acquirer.acquire_remote_tree ile ayni davranis (resume destegi
     dahil, bkz. o fonksiyonun docstring'i -- docs/roadmap.md madde 0.4),
     Windows yollari (ters slash) ve PowerShell komutlariyla.
-    file_lister/manifest_every/mode: mantiksal imaj icin, bkz. orasi."""
+    file_lister/manifest_every/mode: mantiksal imaj icin, bkz. orasi.
+    should_stop: bkz. file_acquirer.acquire_remote_tree docstring'i (AYNI)."""
     kind = remote_path_kind_windows(ssh, remote_root)
     if kind is None:
         coc.log_event(coc.EVENT_EXAM_ERROR, f"Yol bulunamadi (Windows): {remote_root}")
@@ -767,7 +787,18 @@ def acquire_remote_tree_windows(ssh, remote_root, output_dir, progress_callback=
             "started_at_utc": started_at_utc,
         })
 
+    durduruldu = False
     for i, uzak_dosya in enumerate(dosyalar, start=1):
+        if should_stop and should_stop():
+            durduruldu = True
+            _yaz_kalici_manifest()
+            coc.log_event(
+                coc.EVENT_EXAM_STOPPED,
+                f"Dosya/klasor alma kullanici tarafindan durduruldu (Windows): {remote_root} "
+                f"({len(acquired_files)}/{toplam})",
+            )
+            break
+
         if uzak_dosya in onceden_alinan:
             if progress_callback:
                 progress_callback(i + n_pre, toplam)
@@ -798,15 +829,17 @@ def acquire_remote_tree_windows(ssh, remote_root, output_dir, progress_callback=
         if progress_callback:
             progress_callback(i + n_pre, toplam)
 
-    coc.log_event(
-        coc.EVENT_EXAM_END,
-        f"Dosya/klasor alma tamamlandi (Windows): {len(sonuclar)}/{toplam} basarili, "
-        f"{len(basarisiz)} basarisiz",
-    )
+    if not durduruldu:
+        coc.log_event(
+            coc.EVENT_EXAM_END,
+            f"Dosya/klasor alma tamamlandi (Windows): {len(sonuclar)}/{toplam} basarili, "
+            f"{len(basarisiz)} basarisiz",
+        )
 
     # Mantiksal imajda bazi dosyalar KALICI olarak alinamaz -- bkz.
-    # file_acquirer.acquire_remote_tree'deki AYNI gerekce.
-    if (not basarisiz and len(acquired_files) == toplam) or mode != "file":
+    # file_acquirer.acquire_remote_tree'deki AYNI gerekce (durduruldu
+    # durumunda mode ne olursa olsun manifest KORUNUR, orasindaki AYNI not).
+    if not durduruldu and ((not basarisiz and len(acquired_files) == toplam) or mode != "file"):
         delete_manifest(manifest_path)
 
     manifest = {
@@ -818,6 +851,7 @@ def acquire_remote_tree_windows(ssh, remote_root, output_dir, progress_callback=
         "failed_reasons": failed_reasons,
         "excluded": dislanan,
         "acquired_at": datetime.now(timezone.utc).isoformat(),
+        "stopped": durduruldu,
     }
 
     os.makedirs(output_dir, exist_ok=True)
@@ -829,7 +863,7 @@ def acquire_remote_tree_windows(ssh, remote_root, output_dir, progress_callback=
 
 
 def acquire_logical_image_windows(ssh, remote_root, output_dir, progress_callback=None,
-                                   manifest_path=None, resume_state=None, host=None):
+                                   manifest_path=None, resume_state=None, host=None, should_stop=None):
     """Mantiksal imaj (Windows): remote_root'un (orn. C:\\) var olan TUM
     dosyalari; kilitli hacim-koku sistem dosyalari dislanir, okunamayanlar
     sebepleriyle raporlanir. file_acquirer.acquire_logical_image'in karsiligi."""
@@ -837,4 +871,5 @@ def acquire_logical_image_windows(ssh, remote_root, output_dir, progress_callbac
         ssh, remote_root, output_dir, progress_callback=progress_callback,
         manifest_path=manifest_path, resume_state=resume_state, host=host,
         file_lister=list_logical_files_windows, manifest_every=LOGICAL_MANIFEST_EVERY, mode="logical",
+        should_stop=should_stop,
     )
