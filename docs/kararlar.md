@@ -99,3 +99,61 @@ onay alınması gerekiyor), bu kararın "tüm yetkiyi veriyorum" onayı
 kapsamında olup olmadığını netleştirmeden kurulumu başlatmadım — asıl
 kurulum adımı ayrı bir mesajda, tam komut + etkisiyle birlikte
 sorulacak.
+
+---
+
+### 2026-09-30 — Devam: araştırma ilerletildi, derleme rehberi + script hazırlandı
+
+**Durum:** Yukarıdaki yön kararının (Seçenek 1) UYGULANABİLİR hale
+getirilmesi istendi ("araştırmayı ilerlet", tam yetki verilerek). Bu
+oturumda yapılanlar:
+
+1. **CI script analiziyle ikinci bir doğrulama** — libewf'in resmi
+   Windows wheel CI pipeline'ı (`.github/workflows/build_wheel.yml` +
+   çağırdığı `synclibs.ps1`) incelendi: `synclibs.ps1` sadece 21 libyal
+   alt-kütüphanesini (libbfio, libcerror, vb.) senkronize ediyor, zlib'i
+   hiç indirmiyor/senkronize etmiyor. Bu, PyPI'daki resmi wheel'in
+   zlib'siz derlendiğini (önceki oturumun elle test ederek bulduğu
+   sonuçla tutarlı) CI tasarımı seviyesinde doğruluyor — rastgele bir
+   derleme hatası değil, bilinçli bir CI kapsam sınırı. Ayrıca modern
+   `_build.py` (PEP 517 build backend) incelendi: MSVC için sadece
+   `_CRT_SECURE_NO_WARNINGS`/`UNICODE`/`WINVER` macro'ları tanımlanıyor,
+   zlib/bzip2 için include/lib yolu arama mantığı YOK — yani
+   `pip install`/`python -m build` akışı Windows'ta zlib'i otomatik
+   bulmuyor, klasik `msvscpp\libewf.sln` + elle zlib sibling-folder
+   yöntemi (libyal'ın resmi wiki/Building sayfasında anlatılan) hâlâ TEK
+   güvenilir yol olarak doğrulandı.
+2. **Uygulama rehberi yazıldı:** `docs/ewf_derleme_rehberi.md` — neden bu
+   derleme gerektiği, tam ön koşullar (Visual Studio Build Tools +
+   "Desktop development with C++", Chameleon'un `.exe` derlemesinde
+   kullanılanla AYNI Python sürümü/mimarisi, zlib kaynak indirme), adım
+   adım klasör yapısı + tam `msbuild ... /p:Configuration=Release
+   /p:Platform=x64` komutu (Win32 DEĞİL, Chameleon x64 hedeflediği
+   için), derlenen `pyewf`'in GERÇEKTEN zlib ile yazabildiğini doğrulayan
+   bir Python test script'i (birkaç MB sıkıştırılabilir veri yazıp E01
+   çıktısının ham veriden küçük olduğunu VE `get_compression_method()`
+   API'sinden "deflate" döndüğünü doğruluyor), ve Chameleon'a entegrasyon
+   PLANI (pytsk3 deseniyle tutarlı: derlenen `.pyd`/DLL'leri
+   `site-packages`'e yerleştirip `build.spec`'in `hiddenimports`'una
+   `"pyewf"` eklemek) — bu entegrasyon adımı BİLEREK UYGULANMADI, çünkü
+   derlenmiş binary olmadan (bu ortamda üretilemez) kod gerçek anlamda
+   test edilemez.
+3. **Otomasyon script'i yazıldı:** `scripts/build_libewf_windows.ps1` —
+   zlib indirme+açma+`zlib` adıyla yeniden adlandırma, libewf kaynağını
+   klonlama/indirme, `msbuild` çağrısı (Release/x64) adımlarını
+   otomatikleştiriyor; Visual Studio Build Tools kurulumunu KENDİSİ
+   YAPMIYOR (o hâlâ kullanıcının ayrı onayı gereken bir adım), sadece
+   derleme öncesi/sırası adımları otomatikleştiriyor. `scripts/` klasörü
+   bu oturumda ilk kez oluşturuldu (repoda daha önce yoktu).
+
+**Bilinçli olarak yapılMAYAN, açıkça kalan sınır:** Gerçek derleme (ne
+`msbuild` ne de Visual Studio Build Tools kurulumu) bu cloud/Linux
+oturumunda ÇALIŞTIRILMADI — hem bu ortam Linux olduğu için Windows
+binary üretmek teknik olarak mümkün değil, hem de Visual Studio Build
+Tools kurulumu kullanıcının kendi Windows makinesinde, ayrı bir
+sistem-komutu onayı gerektiren bir adım (yukarıdaki "henüz YAPILMADI"
+notuyla aynı gerekçe, hâlâ geçerli). Kullanıcı kendi makinesinde önce
+Visual Studio Build Tools'u kurup (onaylayarak), sonra
+`scripts/build_libewf_windows.ps1`'i çalıştırıp, `docs/ewf_derleme_rehberi.md`
+bölüm (d)'deki test script'iyle doğrulayıp, ardından (ayrı bir adımda)
+bölüm (e)'deki entegrasyon planını uygulamalı.
