@@ -86,3 +86,47 @@ def test_hash_files_multi_missing_segment_raises(tmp_path):
     (tmp_path / "parca.001").write_bytes(b"veri")
     with pytest.raises(FileNotFoundError):
         hv.hash_files_multi([tmp_path / "parca.001", tmp_path / "parca.002"])
+
+
+def test_verify_image_against_manifest_all_matched(sample_file):
+    path, data = sample_file
+    chunk_size = 1024
+    expected = {}
+    for i in range(0, len(data), chunk_size):
+        block = data[i : i + chunk_size]
+        expected[i // chunk_size] = hashlib.sha256(block).hexdigest()
+
+    report = hv.verify_image_against_manifest(path, expected, chunk_size=chunk_size)
+    assert report.ok
+    assert not report.mismatched
+    assert not report.missing
+    assert not report.unexpected
+    assert not report.malformed
+    assert report.master.digest == hashlib.sha256(data).hexdigest()
+
+
+def test_verify_image_against_manifest_malformed_entries_dont_raise(sample_file):
+    """Yarim kalan/bozuk bir manifest'te gecersiz indeks (int'e cevrilemeyen)
+    ya da gecersiz ozet (yanlis uzunlukta hex) iceren girdiler, fonksiyonun
+    kendi sozlestigi gibi (docstring: 'hata FIRLATMAZ') hic exception
+    firlatmadan report.malformed'a kaydedilmeli, dogrulama calismaya devam
+    etmeli."""
+    path, data = sample_file
+    chunk_size = 1024
+    expected = {
+        "gecersiz-indeks": hashlib.sha256(b"x").hexdigest(),
+        0: "kisa-ve-gecersiz-ozet",
+    }
+
+    report = hv.verify_image_against_manifest(path, expected, chunk_size=chunk_size)
+
+    assert not report.ok
+    assert len(report.malformed) == 2
+    # Gecersiz girdiler normalized_expected'e hic girmedigi icin gercek 0.
+    # blok, hicbir beklenen ozetle eslesmeyip "unexpected" olarak raporlanir.
+    assert any(item["index"] == 0 for item in report.unexpected)
+
+
+def test_verify_image_against_manifest_missing_file_raises(tmp_path):
+    with pytest.raises(FileNotFoundError):
+        hv.verify_image_against_manifest(tmp_path / "yok.bin", {})
