@@ -327,3 +327,20 @@ genişleterek) `image_acquirer.py`'nin `acquire_disk_image` fonksiyonunun
 `"started_at_utc": started_at_utc` eklemesini isteyebilir — teknik
 karşılığı zaten bu oturumda `windows_acquirer.py` için yazılmış
 düzeltmenin birebir aynısı, tek fark hangi fonksiyonda uygulanacağı.
+
+## 2026-09-30 — Yukarıdaki ikilem çözüldü: `image_acquirer.py`'ye aynı `started_at_utc` düzeltmesi uygulandı
+
+**Durum:** Bir üstteki maddede "kullanıcıya bırakıldı" diye işaretlenen
+açık nokta (image_acquirer.py'nin `user_stopped`/bağlantı-koptu erken
+dönüşlerinde `started_at_utc` eksikliği), bu oturumda kullanıcının
+`write_block_helper.py`/`image_acquirer.py` için verdiği yeni görev
+tanımının kendisinde AÇIKÇA istenerek karara bağlandı (görev tanımının
+"EK BULGU" maddesi, tam olarak bu ikilemi işaret ediyordu).
+
+**Seçilen:** `windows_acquirer.py`'deki aynı düzeltme (`"started_at_utc":
+started_at_utc` eklenmesi) `image_acquirer.py`'nin iki erken-dönüş
+sözlüğüne de (satır ~630 `user_stopped`, satır ~656 bağlantı-koptu)
+uygulandı — bkz. `docs/roadmap.md`'deki ilgili madde.
+
+**Neden:** Kullanıcı bu maddeyi açıkça görev tanımına dahil ederek
+istedi, kendi başıma karar vermem gerekmedi.

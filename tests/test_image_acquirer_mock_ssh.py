@@ -62,6 +62,10 @@ class MockSSHClient:
         self.reconnect_succeeds = True
         # block_no -> bu blok icin dondurulecek YANLIS hash (bir kere)
         self.bad_hash_once = {}
+        # is_write_blocked() cagrisinin ne donecegini kontrol eder: None ->
+        # normal (write_blocked bayragina gore "1"/"0"), "FORCE_NONE" -> SSH
+        # hatasi taklidi (bkz. windows_acquirer.py testlerindeki AYNI desen).
+        self.readonly_check_mode = None
 
     # -- ssh_connector.SSHConnector arayuzu --
     def is_active(self):
@@ -82,6 +86,8 @@ class MockSSHClient:
             self.write_blocked = True
             return ("", "", 0)
         if "--getro" in cmd:
+            if self.readonly_check_mode == "FORCE_NONE":
+                return (None, "ssh baglanti hatasi", None)
             return ("1" if self.write_blocked else "0", "", 0)
         if "lsblk" in cmd:
             return ('MODEL="MockDisk" SERIAL="TEST123"', "", 0)
@@ -287,3 +293,122 @@ def test_should_stop_halts_cleanly_and_marks_user_stopped(tmp_path, fake_disk):
         resume_state=result, manifest_path=result["manifest_path"],
     )
     assert result2["acquired_blocks"] == [0, 1, 2]
+
+
+# ---------------------------------------------------------------------------
+# Hata: baglanti koptu/durduruldu erken-donus sozluklerinde started_at_utc
+# eksikti -- windows_acquirer.py'de bu oturumda AYNI hata duzeltildi,
+# burada da (image_acquirer.py, Linux tarafi) ayni eksiklik vardi (bkz.
+# docs/roadmap.md, docs/kararlar.md).
+# ---------------------------------------------------------------------------
+
+def test_user_stopped_return_dict_includes_started_at_utc(tmp_path, fake_disk):
+    ssh = MockSSHClient(fake_disk)
+    result = ia.acquire_disk_image(
+        ssh, "/dev/fake0", password=None, output_dir=str(tmp_path),
+        block_size_mb=1, apply_write_blocker=True, should_stop=lambda: True,
+    )
+    assert result["user_stopped"] is True
+    assert "started_at_utc" in result and result["started_at_utc"]
+
+
+def test_connection_lost_return_dict_includes_started_at_utc(tmp_path, fake_disk):
+    ssh = MockSSHClient(fake_disk)
+    ssh._active = False
+    ssh.reconnect_succeeds = False  # yeniden baglanma basarisiz -- hemen durur
+
+    result = ia.acquire_disk_image(
+        ssh, "/dev/fake0", password=None, output_dir=str(tmp_path),
+        block_size_mb=1, apply_write_blocker=True,
+    )
+    assert "resume_from" in result
+    assert "started_at_utc" in result and result["started_at_utc"]
+
+
+def test_started_at_utc_preserved_across_successive_early_returns(tmp_path, fake_disk):
+    """Duzeltmeden once: erken donus sozluklerinde started_at_utc HIC
+    olmadigi icin, bu sozluk dogrudan bir sonraki cagriya resume_state
+    olarak verildiginde YENI bir zaman damgasi uretilirdi. Simdi: ilk
+    cagridan donen started_at_utc, ikinci (resume) cagriya AYNEN gecmeli."""
+    ssh1 = MockSSHClient(fake_disk)
+    ilk = ia.acquire_disk_image(
+        ssh1, "/dev/fake0", password=None, output_dir=str(tmp_path),
+        block_size_mb=1, apply_write_blocker=True, should_stop=lambda: True,
+    )
+    assert ilk["started_at_utc"]
+
+    ssh2 = MockSSHClient(fake_disk)
+    ssh2.write_blocked = True
+    ikinci = ia.acquire_disk_image(
+        ssh2, "/dev/fake0", password=None, output_dir=str(tmp_path),
+        block_size_mb=1, start_block=ilk["resume_from"], resume_state=ilk,
+        manifest_path=ilk["manifest_path"], should_stop=lambda: True,
+    )
+    assert ikinci["started_at_utc"] == ilk["started_at_utc"], (
+        "resume sirasinda ORIJINAL baslangic zamani KORUNMALI, "
+        "yeni bir zaman damgasi uretilmemeli"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Hata: resume sirasinda is_write_blocked() None (SSH hatasi) donerse delil
+# zincirine hicbir kayit girmiyordu -- windows_acquirer.py'de bu oturumda
+# duzeltilen AYNI eksiklik Linux tarafinda da vardi.
+# ---------------------------------------------------------------------------
+
+def test_resume_write_block_check_none_logs_exam_error(tmp_path, fake_disk, isolated_coc_log):
+    ssh = MockSSHClient(fake_disk)
+    ssh.readonly_check_mode = "FORCE_NONE"  # is_write_blocked() None donsun
+
+    resume_state = {
+        "acquired_blocks": [0],
+        "failed_blocks": [],
+        "block_paths": {"0": str(tmp_path / "block_000000.dd")},
+        "started_at_utc": "2020-01-01T00:00:00Z",
+    }
+    ia.acquire_disk_image(
+        ssh, "/dev/fake0", password=None, output_dir=str(tmp_path),
+        block_size_mb=1, total_blocks=3, start_block=1, resume_state=resume_state,
+        manifest_path=str(tmp_path / "manifest.json"),
+        should_stop=lambda: True,  # kontrolden SONRA hemen dur, blok islemeye gerek yok
+    )
+
+    events = isolated_coc_log.read_events(isolated_coc_log.get_log_file_path())
+    eslesenler = [
+        e for e in events
+        if e["event"] == isolated_coc_log.EVENT_EXAM_ERROR and "DOGRULANAMADI" in e["description"]
+    ]
+    assert eslesenler, (
+        "write-block durumu None (SSH hatasi) donerse delil zincirine "
+        "BIR KAYIT girmeli -- sessizce atlanmamali"
+    )
+
+
+def test_resume_write_block_check_true_and_false_still_log_as_before(tmp_path, fake_disk, isolated_coc_log):
+    """Yeni None dali eklenirken mevcut True/False davranisi BOZULMAMALI."""
+    resume_state = {
+        "acquired_blocks": [0],
+        "failed_blocks": [],
+        "block_paths": {"0": str(tmp_path / "block_000000.dd")},
+        "started_at_utc": "2020-01-01T00:00:00Z",
+    }
+
+    ssh_true = MockSSHClient(fake_disk)
+    ssh_true.write_blocked = True
+    ia.acquire_disk_image(
+        ssh_true, "/dev/fake0", password=None, output_dir=str(tmp_path),
+        block_size_mb=1, total_blocks=3, start_block=1, resume_state=dict(resume_state),
+        manifest_path=str(tmp_path / "m1.json"), should_stop=lambda: True,
+    )
+    events = isolated_coc_log.read_events(isolated_coc_log.get_log_file_path())
+    assert any(e["event"] == isolated_coc_log.EVENT_WRITE_BLOCK_APPLIED for e in events)
+
+    ssh_false = MockSSHClient(fake_disk)
+    ssh_false.write_blocked = False
+    ia.acquire_disk_image(
+        ssh_false, "/dev/fake0", password=None, output_dir=str(tmp_path),
+        block_size_mb=1, total_blocks=3, start_block=1, resume_state=dict(resume_state),
+        manifest_path=str(tmp_path / "m2.json"), should_stop=lambda: True,
+    )
+    events = isolated_coc_log.read_events(isolated_coc_log.get_log_file_path())
+    assert any(e["event"] == isolated_coc_log.EVENT_WRITE_BLOCK_SKIPPED for e in events)

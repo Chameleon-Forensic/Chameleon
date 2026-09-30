@@ -29,6 +29,23 @@ def _run_blockdev(ssh, flag, disk_path, password):
     return ssh.run_command(f"sudo blockdev {flag} {safe_disk_path}", get_pty=True)
 
 
+def _last_output_token(output):
+    """
+    blockdev --getro ciktisinin SON (bos olmayan) satirini doner.
+
+    password=None (NOPASSWD sudo) yolu get_pty=True kullanir; ssh_connector.
+    run_command()'in kendi docstring'i (bkz. "get_pty=True" notu) bu modda
+    uzak stdout+stderr'in genelde TEK akista birlestigini belirtiyor. Hedefte
+    NOPASSWD sudo varsa VE /etc/hosts'ta kendi hostname'i yoksa (adli imaj
+    hedeflerinde YAYGIN bir durum), sudo gercek "0"/"1" satirindan ONCE
+    "sudo: unable to resolve host ..." gibi bir uyari satiri basar --
+    ciktinin TAMAMINA esitlik kontrolu bu durumda YANLIS sonuc uretir. Bu
+    yuzden ciktinin TAMAMI degil, SON satiri degerlendirilir.
+    """
+    lines = [ln.strip() for ln in (output or "").strip().splitlines() if ln.strip()]
+    return lines[-1] if lines else ""
+
+
 def is_write_blocked(ssh, disk_path, password=None):
     """
     Diskin O ANDA salt-okunur olup olmadigini (blockdev --getro) SADECE
@@ -42,12 +59,19 @@ def is_write_blocked(ssh, disk_path, password=None):
     varsayimini korumak yerine devam etmeden once GERCEKTEN dogrulamak
     icin var (bkz. image_acquirer.py'deki resume mantigi).
 
-    Donus: True (salt-okunur), False (degil), None (kontrol edilemedi -- SSH hatasi).
+    Donus: True (salt-okunur), False (degil), None (kontrol edilemedi -- SSH
+    hatasi YA DA uzak komut basarisiz oldu, orn. blockdev PATH'te degil,
+    disk yolu artik mevcut degil).
     """
-    getro_out, _err, _exit = _run_blockdev(ssh, "--getro", disk_path, password)
+    getro_out, _err, exit_status = _run_blockdev(ssh, "--getro", disk_path, password)
     if getro_out is None:
         return None
-    return getro_out.strip() == "1"
+    if exit_status != 0:
+        # Komut SSH seviyesinde calisti ama kendisi basarisiz oldu (orn.
+        # "blockdev: cannot open ...") -- bu "salt-okunur DEGIL" ile AYNI
+        # sey degil, kontrol hic YAPILAMADI demek.
+        return None
+    return _last_output_token(getro_out) == "1"
 
 
 def apply_write_block(ssh, disk_path, password=None):
@@ -77,7 +101,7 @@ def apply_write_block(ssh, disk_path, password=None):
         )
         return False
 
-    if getro_out.strip() == "1":
+    if _last_output_token(getro_out) == "1":
         coc.log_event(
             coc.EVENT_WRITE_BLOCK_APPLIED,
             f"Disk salt-okunur yapildi ve dogrulandi: {disk_path}",
