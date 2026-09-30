@@ -132,6 +132,28 @@ def build_path_tree(paths):
     return kok
 
 
+def _guvenli_onizleme_dosya_adi(inode, isim):
+    """Tam Disk agacindaki (disk_tree.py) bir dosyanin `isim`'ini, ONIZLEME
+    icin GECICI diskteki dosya adina donusturmeden once sanitize eder.
+
+    ONEMLI: `isim` pytsk3/Sleuthkit tarafindan dizin girdisinden HAM BAYT
+    olarak okunuyor -- disk_tree.py bunu hicbir OS dosya adi dogrulamasindan
+    GECIRMIYOR. Kotu amacli/bozuk bir imaj, adinda '/' veya '\\' ya da '..'
+    iceren bir girdi barindirabilir (path traversal, CWE-22); os.path.join
+    ile dogrudan birlestirilirse bu, GECICI KLASORUN DISINA yazmaya yol
+    acabilir. Bu yuzden `isim` gercek dosya adi olarak hic KULLANILMIYOR --
+    sadece gorunen/orijinal ismin uzantisi (varsa, salt gosterim/raporlama
+    amacli) korunuyor, dosyanin kendisi TSK'nin kendi urettigi inode
+    numarasina dayanan sabit bir adla yaziliyor."""
+    # Windows'ta hem '/' hem '\\' ayrac olabilir -- os.path.basename TEK
+    # basina YETMEZ (ör. Linux'ta calisirken '\\' ayrac sayilmaz), bu yuzden
+    # ikisini de elle temizliyoruz.
+    taban_isim = isim.replace("\\", "/").rsplit("/", 1)[-1]
+    _, nokta_var_mi, uzanti_ham = taban_isim.rpartition(".")
+    uzanti = "".join(ch for ch in uzanti_ham if ch.isalnum())[:16] if nokta_var_mi else ""
+    return f"inode{int(inode)}" + (f".{uzanti}" if uzanti else "")
+
+
 from ui_kit import theme_qt as ui, fonts, icons, widgets  # noqa: E402
 from help_content import get_topic  # noqa: E402
 from strings import t  # noqa: E402
@@ -2634,11 +2656,23 @@ class ForensicWidget(QWidget):
             if not veri:
                 return
             offset, inode, isim = veri
-            gecici_yol = os.path.join(tempfile.gettempdir(), f"chameleon_onizleme_{inode}_{isim}")
+            # isim SANITIZE EDILMEDEN kullanilmaz -- bkz. _guvenli_onizleme_
+            # dosya_adi docstring'i (path traversal, CWE-22).
+            guvenli_ad = _guvenli_onizleme_dosya_adi(inode, isim)
+            gecici_kok = tempfile.gettempdir()
+            gecici_yol = os.path.join(gecici_kok, f"chameleon_onizleme_{guvenli_ad}")
+            # Savunma derinligi: sanitize mantiginda ileride bir hata olsa
+            # bile, nihai yol gercekten gecici klasorun ALTINDA kalmiyorsa
+            # cikarma islemi YAPILMAZ.
+            gercek_yol = os.path.realpath(gecici_yol)
+            gercek_kok = os.path.realpath(gecici_kok)
+            if gercek_yol != gercek_kok and not gercek_yol.startswith(gercek_kok + os.sep):
+                self._log("[UYARI] Onizleme yolu gecici klasor disinda, cikarma iptal edildi.", "warn")
+                return
             try:
                 disk_tree.extract_file(image_path, offset, inode, gecici_yol)
                 os.startfile(gecici_yol)
-            except OSError as exc:
+            except (OSError, disk_tree.DiskTreeError) as exc:
                 self._log(f"[UYARI] Dosya çıkarılamadı: {exc}", "warn")
 
         tree.itemDoubleClicked.connect(_cift_tikla)
