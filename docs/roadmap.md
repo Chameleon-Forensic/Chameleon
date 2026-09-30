@@ -207,6 +207,14 @@
 
   Testler: `tests/test_forensic_report.py`'ye 3 yeni regresyon testi — madde 1 için dengesiz reportlab markup'lı (case_notes, organization, write_blocking_reason, failed_items, chain-of-custody description) bir `report.json`'la `export_pdf()`'in artık `ValueError` fırlatmadığı, madde 2 için sadece md5_hash (ya da sadece sha1_hash) verilince diğerinin dosyadan doğru hesaplandığı VE verilenin ezilmediği, madde 3 için `coc.read_events_with_status`'un `save()` başına tam olarak 1 kez çağrıldığı (`monkeypatch` ile sayılarak) doğrulandı. Tüm suite: 235 geçti, 10 Windows-only bilinçli atlama.
 
+- **Sistematik code-review taraması (bu oturum) — yukarıdaki 7 modülde (hash_verifier, windows_acquirer, image_acquirer, disk_tree/gui_v2, write_block_helper, chain_of_custody, ssh_connector, file_acquirer, main.py, verify_report.py, forensic_report.py) toplam 30+ gerçek hata bulundu ve düzeltildi.** Kullanıcı isteğiyle tarama burada DURAKLATILDI (lokale çekilip devam edilecek). **HENÜZ İNCELENMEYEN/DÜZELTİLMEYEN modüller (bir sonraki oturumda devam edilmeli):**
+  - `local_connector.py` — review YAPILDI, 2 gerçek hata bulundu ama HENÜZ DÜZELTİLMEDİ: (1) `check_root_output_separate`, disk numarası belirlenemediğinde (`disk_number_of_path` None dönerse) fail-OPEN davranıyor — kardeş fonksiyon `check_output_not_on_source` AYNI durumda fail-CLOSED (`output_disk_unknown` hatası veriyor); tutarsızlık, "kaynak diske asla yazma" kuralını sessizce atlatabilir. (2) `read_local_block`, son kısmi blok için blok-hizalı OLMAYAN bir okuma boyutu istiyor (`uzunluk = boyut - ofset`), `\\.\PhysicalDriveN` üzerinde bu hizalama kısıtına çarpıp `OSError` verebilir — uzak/PowerShell yolu (`windows_acquirer._block_read_script`) bunu BİLEREK her zaman tam blok okuyup SONRA kırparak çözüyor, yerel yol aynı korumayı taşımıyor.
+  - `tor_client.py`, `socks5.py` (sadece read-only incelendi, ssh_connector.py düzeltmesi sırasında), `onion_auth.py`, `tor_manager.py` — hiç dedike review YAPILMADI.
+  - `ram_gui.py` (840 satır), `incomplete_ops.py` — hiç dedike review YAPILMADI.
+  - `gui_v2.py` (2705 satır) — sadece disk_tree.py'nin path-traversal düzeltmesiyle ilgili kısmı dokunuldu, TAMAMI review'dan GEÇMEDİ.
+  - `chameleon_gui.py` (launcher, 2852 satır) — hiç dedike review YAPILMADI.
+  - `security-review` skill'i ile TÜM branch'in (main'e karşı) güvenlik taraması HENÜZ YAPILMADI.
+
 ## Sırada
 
 0. **Yarım kalan vaka takibi + Mantıksal (sadece dolu alan) imaj** — kullanıcı isteğiyle planlandı, küçükten büyüğe sıralı, her adımdan sonra gerçek `.exe` testiyle doğrulanacak:
