@@ -388,3 +388,66 @@ tarihli iki log dosyasını karşılaştırırken bu farkı bilmesi gerekir —
 kod içinde bu durumu ayrıca işaretleyen bir mekanizma YOK. Kullanıcı
 isterse log formatına bir "fingerprint_algorithm" alanı eklenmesini
 isteyebilir; bu görev tanımının kapsamı dışında bırakıldı.
+
+---
+
+## 2026-09-30 — `file_acquirer.py` resume düzeltmesi: yerel dosyanın yeniden
+doğrulanması varlık kontrolü mü, tam hash mi?
+
+**Durum:** Code review'da bulunan hata: resume, `resume_state`'in
+`acquired_files` listesine körü körüne güveniyordu — önceki bir çalışma
+dosya X'i "alındı" diye işaretledikten SONRA çökmüşse ve output_dir'deki
+yerel kopya taşınmış/temizlenmiş/karantinaya alınmışsa, resume X'i hiçbir
+kontrol yapmadan atlıyor, nihai manifest yerel dosya aslında eksik/bozuk
+olsa bile "başarıyla alındı ve hash doğrulandı" diye raporluyordu. Görev
+tanımı düzeltmeyi istedi ama YÖNTEMİ (varlık kontrolü mü, tam hash
+yeniden hesaplaması mı) bana bıraktı — "tam hash yeniden hesaplamak
+performans açısından pahalı olabilir, en azından VARLIK kontrolü şart"
+notuyla.
+
+**Değerlendirilen seçenekler:**
+1. **Sadece `os.path.exists()` kontrolü** — ucuz (tek bir stat çağrısı),
+   dosyanın TAMAMEN kaybolduğu (bildirilen asıl senaryo: silinme,
+   taşınma, karantina) durumu yakalar. Yakalamadığı: dosya duruyor ama
+   İÇERİĞİ bozulmuş (disk hatası, kısmi/yarım kopyalanmış, birisi
+   üzerine başka bir şey yazmış) — bu durumda hâlâ "doğrulandı" diye
+   yanlış rapor verilir.
+2. **Her zaman tam SHA-256 yeniden hesapla** (`get_remote_file_hash`
+   ile uzak dosyayı TEKRAR okuyup zaten sonuçlarda duran hash ile
+   karşılaştırmak, ya da yerel dosyayı okuyup sonuçtaki sha256 ile
+   karşılaştırmak) — en sağlam, ama iki maliyeti var: (a) yerel dosyayı
+   okumak GB'larca veri olabilecek dosyalarda yavaş, (b) uzak dosyayı
+   yeniden okumak (uzak hash için) tam bir SSH+dd turu daha demek —
+   mantıksal imaj modunda YÜZ BİNLERCE dosya olabileceği düşünülürse
+   (bkz. `LOGICAL_MANIFEST_EVERY = 100`), resume başına bu, o kadar
+   dosyanın TAMAMEN yeniden alınması kadar maliyetli hale gelebilir —
+   resume'un asıl amacı olan "kaldığı yerden hızlı devam"ı büyük ölçüde
+   boşa çıkarır.
+3. **Boyut karşılaştırması da ekle** (varlık + `os.path.getsize()` ==
+   `resume_state`'teki kayıtlı boyut, sha256'nın yanında YENİ bir alan
+   olarak tutulmalı) — varlık kontrolünden biraz daha güçlü (kısmi
+   kesilmiş bir dosyayı da yakalar), ama mevcut `acquired_detail`
+   şemasına yeni bir alan eklemeyi (`size`) gerektirir, ESKİ manifestlerle
+   (bu alan olmadan kaydedilmiş) geriye dönük uyumluluk sorunu çıkarır,
+   ve yine de "aynı boyutta ama içeriği değişmiş" bir bozulmayı
+   yakalamaz.
+
+**Seçilen:** 1 — sadece `os.path.exists()`. Görev tanımının kendisi de
+bunu "en azından şart, hash kontrolü opsiyonel" diye zaten en düşük kabul
+edilebilir çıta olarak işaretlemişti.
+
+**Neden:** Bildirilen/asıl senaryo (program çöktü, output_dir taşındı/
+temizlendi, antivirüs karantinaya aldı, disk değişti) her durumda dosyanın
+TAMAMEN YOK OLMASIYLA sonuçlanıyor — varlık kontrolü bunun hepsini
+yakalıyor. "Dosya duruyor ama içeriği sessizce bozulmuş" senaryosu çok
+daha nadir (elle/kötü niyetli müdahale ya da disk seviyesinde bit-rot
+gerektirir) ve zaten bu aracın ayrı, bilinçli bir özelliği olan "İmaj
+Doğrula" / `verify_report.py` akışıyla ele alınıyor — operatör önemli bir
+vakada resume sonrası isterse tam bir doğrulama ayrıca çalıştırabilir.
+Seçenek 2'nin maliyeti (özellikle mantıksal imajda yüz binlerce dosya
+senaryosunda) resume'un kendi amacını geçersiz kılacak kadar büyük;
+seçenek 3'ün şema değişikliği + geriye dönük uyumluluk riski, kazandırdığı
+ek güvenceye (sadece "boyutu aynı ama içeriği bozuk" dar bir aralık)
+oranla gereksiz karmaşıklık. Varlık kontrolü, en düşük maliyetle en geniş/
+gerçekçi hata sınıfını kapatıyor — geri kalanı (ince içerik bozulması)
+zaten ayrı bir doğrulama katmanının sorumluluğunda.
