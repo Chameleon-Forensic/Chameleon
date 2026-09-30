@@ -597,7 +597,12 @@ def acquire_disk_image(
     if resume_state:
         acquired_blocks = list(resume_state.get("acquired_blocks", []))
         failed_blocks = list(resume_state.get("failed_blocks", []))
-        block_paths = dict(resume_state.get("block_paths", {}))
+        # json.load'dan gelen manifestte anahtarlar STRING'dir ("0", "1", ...) --
+        # int'e cevrilmezse asagida YENI eklenen (int anahtarli) bloklarla
+        # karisir ve concatenate_blocks/write_segments'teki "i not in
+        # block_paths" (int i) kontrolu resume ONCESI alinan hicbir blogu
+        # BULAMAZ (hepsi "eksik" sayilir, oysa hepsi diskte ve dogrulanmis).
+        block_paths = {int(k): v for k, v in resume_state.get("block_paths", {}).items()}
     else:
         acquired_blocks = []
         failed_blocks = []

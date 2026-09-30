@@ -289,3 +289,41 @@ değil (kullanıcının/organizasyonun ortam ayarına dokunmak gerekiyor).
 Kodda değişiklik gerekmediği, sadece dosya eksikliği olduğu için, bu
 madde şimdilik AÇIK bırakıldı — kullanıcı bir seçim yapana kadar kod
 tarafında yapılacak bir şey yok.
+
+## 2026-09-30 — `windows_acquirer.py` code-review düzeltmeleri: kapsam sınırı ve bir ilgili (düzeltilmemiş) bulgu
+
+**Durum:** `windows_acquirer.py` üzerinde yapılan high-effort code
+review'da bulunan 4 hata düzeltilirken (bkz. `docs/roadmap.md`), görev
+tanımı kapsamı açıkça "bu 4 hatayla SINIRLI" olarak belirlemişti; madde
+1 (resume'da `block_paths`'in string anahtarlı kalması) için TEK istisna
+tanınmıştı: "`image_acquirer.py`'de de aynısı varsa onu da kapsama dahil
+et."
+
+**Değerlendirilen seçenekler:** Kontrol ederken madde 1'in
+`image_acquirer.py`'de (Linux tarafı, `acquire_disk_image`, satır ~600)
+BİREBİR aynı kalıpla var olduğu doğrulandı — bu, görev tanımının
+öngördüğü istisna kapsamına açıkça giriyordu, orada da düzeltildi.
+
+Ancak aynı taramada, görev tanımının kapsam GENİŞLETMESİ öngörmediği
+**madde 2'nin (bağlantı koptu/durduruldu dönüşlerinde `started_at_utc`
+eksikliği) de `image_acquirer.py`'de BİREBİR aynı şekilde var olduğu**
+görüldü (`acquire_disk_image`'in `user_stopped` ve bağlantı-koptu erken
+dönüş sözlüklerinin ikisi de `started_at_utc` içermiyor, satır ~613-652)
+— yani Linux tarafında da "resume sonrası başlangıç zamanı sıfırlanıyor"
+sorunu muhtemelen gerçek.
+
+**Seçilen:** Görev tanımı "başka ilgisiz refactor yapma" ve kapsamı 4
+hatayla (+sadece madde 1 için `image_acquirer.py` istisnası) sınırlı
+tutmayı AÇIKÇA istediği için, madde 2'yi `image_acquirer.py`'de
+düzeltmedim — sadece burada, `windows_acquirer.py` tarafında düzeltip
+kapsamı kendi başıma sessizce genişletmemek/daraltmamak seçimini
+yaptım.
+
+**Neden kullanıcıya bırakılıyor / henüz karara bağlanmadı:** Bu, kod
+tabanında GERÇEK, muhtemelen aynı sınıftan bir hata olarak duruyor.
+Kullanıcı isterse ayrı bir görevle (ya da bu görevin kapsamını
+genişleterek) `image_acquirer.py`'nin `acquire_disk_image` fonksiyonunun
+`user_stopped`/bağlantı-koptu erken dönüşlerine de aynı
+`"started_at_utc": started_at_utc` eklemesini isteyebilir — teknik
+karşılığı zaten bu oturumda `windows_acquirer.py` için yazılmış
+düzeltmenin birebir aynısı, tek fark hangi fonksiyonda uygulanacağı.
