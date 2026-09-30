@@ -344,3 +344,47 @@ uygulandı — bkz. `docs/roadmap.md`'deki ilgili madde.
 
 **Neden:** Kullanıcı bu maddeyi açıkça görev tanımına dahil ederek
 istedi, kendi başıma karar vermem gerekmedi.
+
+## 2026-09-30 — `ssh_connector.py`: host key fingerprint algoritması MD5'ten gerçek SHA256'ya değiştirildi
+
+**Durum:** `ssh_connector.py`'de bulunan 5 hatadan biri, `host_key_fingerprint`
+alanının docstring'de "SHA256" diye belgelenirken gerçekte `paramiko.PKey.
+get_fingerprint()`'in MD5 digest'ini kullanmasıydı. Bu alan `gui_v2.py`
+tarafından delil zincirine (chain of custody) loglanıyor ve amacı, hedefin
+IT ekibinden BAĞIMSIZ alınacak bir fingerprint'le (örn. `ssh-keygen -lf`
+veya `ssh -v` çıktısı) çapraz kontrol edilebilmek. Bu, davranış değiştiren
+bir düzeltme (delil zincirine yazılan DEĞER değişiyor) olduğu için
+CLAUDE.md'nin istediği şekilde burada da kayıt altına alınıyor.
+
+**Değerlendirilen seçenekler:**
+1. **MD5 kullanmaya devam et, sadece docstring'i "MD5 fingerprint" diye
+   düzelt** — en az değişiklik, ama modern OpenSSH araçlarının (2017'den
+   beri varsayılan) hiçbirinin göstermediği bir formatta kalır; bağımsız
+   doğrulama için operatörün elle MD5 hesaplaması (`ssh-keygen -lf -E md5`)
+   gerekirdi.
+2. **Gerçek SHA256 üret** (`hashlib.sha256(key.asbytes()).digest()` ile
+   elle, ya da paramiko'nun kendi sunduğu bir yol varsa onu kullanarak).
+
+**Seçilen:** 2 — ve kurulu paramiko sürümü (5.0.0) kontrol edildiğinde
+`PKey.fingerprint` adında hazır bir property bulundu (paramiko >= 3.2,
+`.. versionadded:: 3.2`): `"SHA256:<base64>"` biçiminde, OpenSSH'nin
+`ssh-keygen -lf` ve `ssh -v`'nin VARSAYILAN gösterdiği biçimin birebir
+aynısı. Elle `hashlib` ile yeniden üretmek yerine bu hazır property
+kullanıldı — paramiko'nun kendi bakımındaki, test edilmiş bir yol.
+
+**Neden:** Görev tanımının kendisi bu seçimi zaten öneriyordu ("muhtemelen
+GERÇEK SHA256 üretmek daha iyi çünkü OpenSSH'nin güncel varsayılanıyla
+tutarlı olur ve delil zincirindeki çapraz kontrol amacını gerçekten
+karşılar") — kendi başıma karar vermem gerekmedi, sadece paramiko'nun
+kurulu sürümünde bunu hazır sunan bir property olup olmadığını
+araştırmam istendi; vardı, onu kullandım. Tartışmaya açık kalan tek
+nokta: bu, `host_key_fingerprint` alanının SOMUT DEĞERİNİ değiştiriyor —
+önceki bir oturumda (`gui_v2.py`'de) bu alana güvenerek kaydedilmiş
+GEÇMİŞ delil zinciri logları, artık üretilecek YENİ loglardaki değerle
+aynı algoritmaya sahip OLMAYACAK (geçmiş loglar MD5, yeni loglar SHA256).
+Bu, delil bütünlüğü açısından bir sorun değil (her log kendi içinde
+tutarlı, sadece iki farklı algoritma), ama bir adli incelemecinin farklı
+tarihli iki log dosyasını karşılaştırırken bu farkı bilmesi gerekir —
+kod içinde bu durumu ayrıca işaretleyen bir mekanizma YOK. Kullanıcı
+isterse log formatına bir "fingerprint_algorithm" alanı eklenmesini
+isteyebilir; bu görev tanımının kapsamı dışında bırakıldı.

@@ -1,6 +1,7 @@
-import contextlib
+import errno
 import getpass
 import os
+import stat
 import sys
 import threading
 import paramiko
@@ -8,13 +9,23 @@ import paramiko
 from socks5 import connect_via_socks5
 
 # strict=False ("atla") modunda CHAMELEON_KNOWN_HOSTS'a yazma islemini
-# (load + connect + paramiko'nun ic AutoAddPolicy kaydi) BU SUREC icindeki
-# SSHConnector'lar arasinda sirali yapar -- aksi halde iki baglanti
-# (orn. ayni anda iki farkli hedefe TOFU ile baglanma) ayni dosyayi
-# OKUYUP-degistirip-YAZDIGI icin (paramiko save_host_keys() butun HostKeys
-# kumesini bastan yaziyor) biri digerinin az once ogrendigi anahtari
-# ustune yazip kaybedebilirdi. Farkli SURECLER (orn. iki ayri Chameleon.exe)
-# arasindaki yarisi bu kilit onlemez -- o cok daha nadir bir senaryo.
+# BU SUREC icindeki SSHConnector'lar arasinda sirali yapar -- aksi halde
+# iki baglanti (orn. ayni anda iki farkli hedefe TOFU ile baglanma) ayni
+# dosyayi OKUYUP-degistirip-YAZDIGI icin (paramiko save_host_keys() butun
+# HostKeys kumesini bastan yaziyor) biri digerinin az once ogrendigi
+# anahtari ustune yazip kaybedebilirdi. Farkli SURECLER (orn. iki ayri
+# Chameleon.exe) arasindaki yarisi bu kilit onlemez -- o cok daha nadir
+# bir senaryo.
+#
+# ONEMLI (code review'da bulunan bir hata duzeltildi): bu kilit SADECE
+# known_hosts'un okundugu/degistirildigi/yazildigi kritik bolumu korur --
+# _TofuPolicy.missing_host_key() (bkz. asagisi) ve connect() SONRASI
+# yapilan save_host_keys() cagrisi. client.connect()'in KENDISI (TCP+SSH
+# el sikismasinin tamami) kilidin DISINDADIR. Onceki surum, TUM
+# client.connect() cagrisini da bu kilidin ICINE aliyordu -- bu da
+# modulun kendi amaciyla (N farkli hedefe PARALEL TOFU baglanma) TAM
+# TERSI sonuc veriyordu: N hedef icin en kotu durumda calisma suresi
+# N * connect_timeout'a kadar SIRALI hale geliyordu.
 _TOFU_SAVE_LOCK = threading.Lock()
 
 # NOT: Test/demo sunucusunda, SSH ile baglanilan kullanicinin
@@ -65,7 +76,18 @@ class _TofuPolicy(paramiko.AutoAddPolicy):
 
     def missing_host_key(self, client, hostname, key):
         self.learned_new_key = True
-        super().missing_host_key(client, hostname, key)
+        # NOT: paramiko'nun kendi AutoAddPolicy.missing_host_key()'i burada
+        # hem bellekteki host_keys kumesine EKLER hem de HEMEN
+        # save_host_keys() ile DISKE yazar -- ama bu cagri, client.connect()
+        # SURERKEN (yani _TOFU_SAVE_LOCK'un artik kasitli olarak DISINDA
+        # tuttugumuz bir noktada) gerceklesir. super().missing_host_key()'i
+        # OLDUGU GIBI cagirmak, kilidin DISINDA korumasiz bir diske-yazma
+        # yaratirdi -- tam olarak kilidin onlemeye calistigi yarisi. Bu
+        # yuzden SADECE bellekteki ekleme yapilir (baglantinin devam
+        # edebilmesi icin sart); diske YAZMA islemi connect() basarili
+        # olduktan SONRA, kilit ICINDE, connect()'in kendisi tarafindan
+        # tetiklenir (bkz. connect()'teki save_host_keys() cagrisi).
+        client.get_host_keys().add(hostname, key.get_name(), key)
 
 
 class _UnknownHostKeyError(paramiko.SSHException):
@@ -79,6 +101,45 @@ class _UnknownHostKeyError(paramiko.SSHException):
 class _StrictPolicy(paramiko.RejectPolicy):
     def missing_host_key(self, client, hostname, key):
         raise _UnknownHostKeyError(f"Server {hostname!r} not found in known_hosts")
+
+
+def _ensure_known_hosts_file_safe(path):
+    """CHAMELEON_KNOWN_HOSTS dosyasinin gercekten sade bir REGULAR dosya
+    oldugunu (sembolik link DEGIL) dogrular, yoksa olusturur.
+
+    Onceki surum, os.path.islink(path) ile AYRI bir kontrol (check) yapip
+    SONRA open()/load_host_keys() (use) cagiriyordu -- klasik bir TOCTOU
+    (time-of-check-to-time-of-use) acigi: kontrol ile gercek kullanim
+    arasindaki pencerede, ayni makinede yazma izni olan baska bir yerel
+    kullanici dosyayi bir sembolik linke DONUSTUREBILIRDI, kontrolun
+    KENDISI bunu hic engellemiyordu (bir sonraki open() sessizce o linki
+    takip ederdi).
+
+    Burada onun yerine ACMA ile DOGRULAMA ayni ana toplanir:
+      - Linux/macOS: os.O_NOFOLLOW ile acilir -- path bir sembolik link
+        ise open() DOGRUDAN ELOOP ile basarisiz olur, TOCTOU penceresi
+        hic OLUSMAZ.
+      - Windows: os.O_NOFOLLOW tanimli degil (bu bayrak yok, SSH engine
+        Windows'ta HEDEF makine olarak calisiyor ama operator/GUI tarafi
+        Linux'ta da calisabiliyor -- bkz. tests/). Orada, AYRI bir
+        islink() cagrisi yerine, ACILMIS OLAN fd'nin kendisi os.fstat()
+        ile kontrol edilir -- acma ANINDAKI gercek dosya, ayrica
+        cozumlenmis bir path degil.
+    """
+    flags = os.O_RDWR | os.O_CREAT
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    try:
+        fd = os.open(path, flags | nofollow, 0o600)
+    except OSError as exc:
+        if nofollow and exc.errno == errno.ELOOP:
+            raise OSError(f"{path} bir sembolik link -- guvenlik icin kullanilmadi.") from exc
+        raise
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode):
+            raise OSError(f"{path} normal bir dosya degil -- guvenlik icin kullanilmadi.")
+    finally:
+        os.close(fd)
 
 
 class SSHConnector:
@@ -105,9 +166,17 @@ class SSHConnector:
         # strict=True ise ya da baglanti basarisizsa None kalir.
         self.host_key_status = None
         # connect() basarili olunca sunucunun host key'inin okunakli
-        # parmak izi (SHA256, paramiko'nun kendi bicimi) -- delil zincirine
-        # sadece "ogrenildi/biliniyor" DEGIL, TAM OLARAK HANGI kimlige
-        # guvenildigini de kaydedebilmek icin (bkz. gui_v2.py).
+        # parmak izi -- delil zincirine sadece "ogrenildi/biliniyor" DEGIL,
+        # TAM OLARAK HANGI kimlige guvenildigini de kaydedebilmek icin
+        # (bkz. gui_v2.py). GERCEKTEN SHA256 (paramiko PKey.fingerprint,
+        # "SHA256:<base64>" bicimi) -- modern OpenSSH araclarinin
+        # (ssh-keygen -lf, ssh -v) VARSAYILAN gosterdigi bicimle AYNI,
+        # bagimsiz bir kaynaktan alinan parmak iziyle dogrudan
+        # karsilastirilabilir. (Onceki surum PKey.get_fingerprint()'in
+        # MD5 digest'ini "SHA256 fingerprint" diye YANLIS etiketleyip
+        # kaydediyordu -- modern araclarin SHA256 ciktisiyla ASLA
+        # eslesmeyen, delil zincirindeki bagimsiz dogrulama amacini
+        # sessizce bosa cikaran bir hataydi; code review'da bulundu.)
         self.host_key_fingerprint = None
         # socks_proxy_port verilirse (Tor senaryosu -- host bir .onion
         # adresi), TCP baglantisi dogrudan degil, 127.0.0.1:<bu port>'taki
@@ -129,55 +198,75 @@ class SSHConnector:
             self.client.load_system_host_keys()
 
             tofu_policy = None
-            # strict=False'ta CHAMELEON_KNOWN_HOSTS'a yazilabildigi icin
-            # (bkz. _TOFU_SAVE_LOCK aciklamasi) o dal kilit altinda; strict
-            # hicbir sey yazmadigi icin kilide hic girmiyor.
-            lock = _TOFU_SAVE_LOCK if not self.strict else contextlib.nullcontext()
-            with lock:
-                if self.strict:
-                    if self.known_hosts_path and os.path.exists(self.known_hosts_path):
-                        self.client.load_host_keys(self.known_hosts_path)
-                    # Bilinmeyen host key gelirse bağlantıyı REDDET
-                    self.client.set_missing_host_key_policy(_StrictPolicy())
-                else:
-                    # "Doğrulamayı atla": ilk bağlantıda sunucunun kimliğini
-                    # CHAMELEON_KNOWN_HOSTS'a kaydeder (paramiko'nun load_host_keys()
-                    # ile ayarladığı _host_keys_filename sayesinde AutoAddPolicy
-                    # otomatik yazıyor), sonraki bağlantılarda o kayıtla
-                    # karşılaştırır. Bilinmeyen bir sunucuyu sessizce kabul eder
-                    # AMA daha önce bilinen bir sunucunun kimliği değişirse
-                    # (aşağıdaki BadHostKeyException'a bakın) sessizce GEÇMEZ.
-                    # Dosya ONCEDEN yoksa bile load_host_keys() cagirilmali --
-                    # aksi halde paramiko'nun _host_keys_filename'i hic
-                    # ayarlanmaz ve AutoAddPolicy ilk ogrendigi anahtari
-                    # diske YAZAMAZ (once bos dosya olusturulup sonra
-                    # yukleniyor, load_host_keys() var olmayan dosyada
-                    # IOError firlatiyor).
-                    if os.path.dirname(self.known_hosts_path):
-                        os.makedirs(os.path.dirname(self.known_hosts_path), exist_ok=True)
-                    if os.path.islink(self.known_hosts_path):
-                        # Bu dosyanin yerine biri (ayni makinede baska bir
-                        # yerel kullanici) sembolik link koymus olabilir --
-                        # oyle bir dosyaya paramiko'nun kendi yazmasina izin
-                        # vermek yerine erken ve acikca hata veriyoruz.
-                        raise OSError(f"{self.known_hosts_path} bir sembolik link -- guvenlik icin kullanilmadi.")
-                    if not os.path.exists(self.known_hosts_path):
-                        open(self.known_hosts_path, "a").close()
+            if self.strict:
+                if self.known_hosts_path and os.path.exists(self.known_hosts_path):
                     self.client.load_host_keys(self.known_hosts_path)
-                    tofu_policy = _TofuPolicy()
-                    self.client.set_missing_host_key_policy(tofu_policy)
+                # Bilinmeyen host key gelirse bağlantıyı REDDET
+                self.client.set_missing_host_key_policy(_StrictPolicy())
+            else:
+                # "Doğrulamayı atla": ilk bağlantıda sunucunun kimliğini
+                # CHAMELEON_KNOWN_HOSTS'a kaydeder (paramiko'nun load_host_keys()
+                # ile ayarladığı _host_keys_filename sayesinde AutoAddPolicy
+                # otomatik yazıyor), sonraki bağlantılarda o kayıtla
+                # karşılaştırır. Bilinmeyen bir sunucuyu sessizce kabul eder
+                # AMA daha önce bilinen bir sunucunun kimliği değişirse
+                # (aşağıdaki BadHostKeyException'a bakın) sessizce GEÇMEZ.
+                # Dosya ONCEDEN yoksa bile load_host_keys() cagirilmali --
+                # aksi halde paramiko'nun _host_keys_filename'i hic
+                # ayarlanmaz ve AutoAddPolicy ilk ogrendigi anahtari
+                # diske YAZAMAZ.
+                #
+                # Bu hazirlik (dizin olusturma + dosyanin guvenli
+                # acilmasi/olusturulmasi + okunmasi) _TOFU_SAVE_LOCK'un
+                # DISINDA yapilir -- burada sadece OKUMA var, ayni anda
+                # baska bir SSHConnector'in da okumasi zararsizdir; yarisi
+                # olusturacak asil islem (DISKE YAZMA) asagida, connect()
+                # basarili olduktan SONRA, ayri ve kucuk bir kilitli
+                # bolumde yapilir.
+                if os.path.dirname(self.known_hosts_path):
+                    os.makedirs(os.path.dirname(self.known_hosts_path), exist_ok=True)
+                _ensure_known_hosts_file_safe(self.known_hosts_path)
+                self.client.load_host_keys(self.known_hosts_path)
+                tofu_policy = _TofuPolicy()
+                self.client.set_missing_host_key_policy(tofu_policy)
 
-                connect_kwargs = self._build_connect_kwargs()
-                self.client.connect(**connect_kwargs)
+            # client.connect() (TCP acilisi + SSH el sikismasi, Tor gibi
+            # yuksek gecikmeli baglantilarda connect_timeout'a kadar
+            # surebilir) BILEREK _TOFU_SAVE_LOCK'un DISINDA -- code
+            # review'da bulunan bir hata duzeltildi: onceki surum bunu
+            # kilidin ICINE aliyordu, bu da modulun kendi amaciyla (N
+            # farkli hedefe PARALEL TOFU baglanma) TAM TERSI sonuc
+            # veriyordu (N hedef icin en kotu durumda sirali calisma).
+            # strict=False'ta bilinmeyen bir host key gelirse
+            # _TofuPolicy.missing_host_key() (yukarida) SADECE bellege
+            # ekler, diske YAZMAZ -- o adim connect() basarili olduktan
+            # sonra asagida, kilit icinde yapilir.
+            connect_kwargs = self._build_connect_kwargs()
+            self.client.connect(**connect_kwargs)
 
-                if tofu_policy is not None:
-                    self.host_key_status = "learned" if tofu_policy.learned_new_key else "known"
+            if tofu_policy is not None:
+                self.host_key_status = "learned" if tofu_policy.learned_new_key else "known"
+                if tofu_policy.learned_new_key:
+                    # Kritik bolum: known_hosts'a GERCEK diske-yazma burada,
+                    # kilit icinde olur. save_host_keys() cagirmadan once
+                    # kendi icinde dosyayi TEKRAR diskten yukleyip mevcut
+                    # kayitlarla BIRLESTIRIR (paramiko'nun kendi davranisi,
+                    # bkz. SSHClient.save_host_keys() kaynagi) -- yani baska
+                    # bir thread'in bu kilit disindayken (connect() surerken)
+                    # ogrenip kaydettigi baska bir sunucunun anahtari da
+                    # kaybolmadan korunur.
+                    with _TOFU_SAVE_LOCK:
+                        self.client.save_host_keys(self.known_hosts_path)
 
             transport = self.client.get_transport()
             if transport is not None:
                 remote_key = transport.get_remote_server_key()
                 if remote_key is not None:
-                    self.host_key_fingerprint = remote_key.get_fingerprint().hex(":")
+                    # PKey.fingerprint (paramiko >= 3.2): GERCEK SHA256,
+                    # "SHA256:<base64>" bicimi -- ssh-keygen -lf / ssh -v
+                    # varsayilaniyla AYNI. PKey.get_fingerprint() (onceki
+                    # surumde kullanilan) MD5 digest doner, SHA256 DEGILDIR.
+                    self.host_key_fingerprint = remote_key.fingerprint
                 # Uzun surebilecek imaj alma islemlerinde firewall/NAT/cloud
                 # LB gibi ara katmanlarin "bosta" gordugu baglantiyi
                 # sessizce kapatmasini onlemek icin periyodik keepalive.
@@ -232,8 +321,16 @@ class SSHConnector:
             # .onion adresleri normal DNS ile cozulemez -- TCP
             # baglantisini biz acip paramiko'ya hazir soket olarak
             # veriyoruz (paramiko kendi baglanti mantigini atlar).
+            # self.connect_timeout burada ACIKCA iletiliyor -- code
+            # review'da bulunan bir hata duzeltildi: onceki surum burada
+            # hicbir timeout iletmiyordu, socks5.py'deki sabit varsayilan
+            # (15sn) kullaniliyordu. Cagiran self.connect_timeout'u ozellikle
+            # yuksek gecikmeli Tor baglantilari icin yukseltse bile, SOCKS5
+            # CONNECT el sikismasi (Tor uzerinden en uzun suren asama) hala
+            # sabit 15sn'de zaman asimina ugruyordu.
             connect_kwargs["sock"] = connect_via_socks5(
                 "127.0.0.1", self.socks_proxy_port, self.host, self.port,
+                timeout=self.connect_timeout,
             )
             # look_for_keys/allow_agent, sock uzerinden baglanirken de
             # gecerli kalir; sadece hostname/port artik sadece SSH
@@ -311,11 +408,23 @@ class SSHConnector:
                 stdin.write(sudo_password + "\n")
                 stdin.flush()
 
-            # Büyük çıktılarda kilitlenmeyi önlemek için kanalı bekliyoruz
-            exit_status = stdout.channel.recv_exit_status()
-
+            # Standart paramiko deseni: ONCE stdout/stderr TAMAMEN okunur,
+            # SONRA recv_exit_status() cagirilir -- code review'da bulunan
+            # klasik bir paramiko kilitlenme deseni duzeltildi. Onceki
+            # surum recv_exit_status()'u (timeout'suz) stdout/stderr hic
+            # okunmadan ONCE cagiriyordu; uzak komutun ciktisi SSH
+            # kanalinin flow-control penceresini asarsa (orn.
+            # list_remote_files()'in buyuk bir dizin agacinda calistirdigi
+            # "find <dir> -type f"), uzak komut dolu bir pipe'a yazmaya
+            # calisirken BLOKE OLUR ve hic bitmez; kimse stdout okumadigi
+            # icin recv_exit_status() de SONSUZA KADAR bekler -- tum imaj
+            # alma thread'i kurtarilamaz sekilde kilitlenirdi. stdout.read()
+            # (ve stderr.read()) kanal kapanana kadar okur; bu da uzak
+            # tarafin flow-control penceresini surekli bosaltip tikanmayi
+            # onler, exit status ancak bundan SONRA guvenle alinabilir.
             output = stdout.read().decode("utf-8", errors="replace")
             error = stderr.read().decode("utf-8", errors="replace")
+            exit_status = stdout.channel.recv_exit_status()
 
             if exit_status != 0 and error:
                 print(f"[SSH] Komut hatası (Kod {exit_status}): {error}")
