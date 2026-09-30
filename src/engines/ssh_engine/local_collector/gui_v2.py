@@ -27,6 +27,7 @@ import platform
 import re
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 
@@ -180,6 +181,11 @@ try:
 except ImportError:
     generate_keypair = None
     key_fingerprint = None
+
+try:
+    import disk_tree
+except ImportError:
+    disk_tree = None
 
 
 LOG_COLORS = {
@@ -2465,16 +2471,24 @@ class ForensicWidget(QWidget):
         open_btn.clicked.connect(_open_html)
         btns.addWidget(open_btn)
 
-        # Agac gorunumu SADECE Dosya/Klasor ve Mantiksal Imaj icin anlamli --
-        # onlarda dosyalar tek tek, orijinal yapisiyla diske yaziliyor. Tam
-        # Disk (ham blok imaji) bir dosya sistemi degil, agac gosterecek bir
-        # sey yok (mount/ayristirma gerektirir, kapsam disi).
+        # Agac gorunumu Dosya/Klasor ve Mantiksal Imaj'da MANIFEST'ten,
+        # Tam Disk'te ise (pytsk3 varsa) HAM IMAJIN kendisinden kuruluyor
+        # -- bkz. disk_tree.py. Segmentli (.001/.002) ve gzip'li imajlar
+        # bu ilk surumde kapsam disi (disk_tree tek parcali ham imaj
+        # varsayiyor), bu yuzden onlarda buton hic gorunmuyor.
         method = d["tool"]["method"]
         if method in ("file", "logical"):
             manifest_yolu = os.path.join(d["result"]["output_path"] or "", "manifest_files.json")
             if os.path.isfile(manifest_yolu):
                 tree_btn = widgets.SecondaryButton(t("btn_view_tree", self.lang))
                 tree_btn.clicked.connect(lambda: self._show_tree_dialog(manifest_yolu))
+                btns.addWidget(tree_btn)
+        elif method == "disk" and disk_tree is not None:
+            imaj_yolu = d["result"]["output_path"] or ""
+            segmentli = re.search(r"\.\d{3,}$", imaj_yolu) is not None
+            if imaj_yolu and os.path.isfile(imaj_yolu) and not imaj_yolu.endswith(".gz") and not segmentli:
+                tree_btn = widgets.SecondaryButton(t("btn_view_tree", self.lang))
+                tree_btn.clicked.connect(lambda p=imaj_yolu: self._show_disk_tree_dialog(p))
                 btns.addWidget(tree_btn)
 
         btns.addStretch()
@@ -2555,6 +2569,77 @@ class ForensicWidget(QWidget):
                     os.startfile(yerel)
                 except OSError as exc:
                     self._log(f"[UYARI] Dosya açılamadı: {exc}", "warn")
+
+        tree.itemDoubleClicked.connect(_cift_tikla)
+        layout.addWidget(tree)
+
+        close_btn = widgets.SecondaryButton(t("btn_close", self.lang))
+        close_btn.clicked.connect(dialog.close)
+        layout.addWidget(close_btn)
+        dialog.exec()
+
+    def _show_disk_tree_dialog(self, image_path):
+        """Tam Disk (ham blok) imajinda dosya sistemini pytsk3 ile
+        ayristirip agac gosterir -- _show_tree_dialog'un aksine bir
+        manifest'ten degil, DOGRUDAN imajin kendisinden kurulur (bkz.
+        disk_tree.py). Birden fazla bolum (MBR/GPT) varsa her biri ayri
+        bir kok dugum olarak gosterilir; bir bolum ayristirilamazsa (ör.
+        taninmayan/bos dosya sistemi) SADECE o bolumde hata gosterilir,
+        digerleri etkilenmez. Cift tiklamada dosya icerigi GECICI bir
+        dosyaya cikarilip acilir -- imaj hicbir zaman yazilmiyor."""
+        try:
+            bolumler = disk_tree.open_disk_tree(image_path)
+        except disk_tree.DiskTreeError as exc:
+            self._show_error(t("tool_disk_tree_error_fmt", self.lang, exc=exc))
+            return
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle(t("tool_tree_dialog_title", self.lang))
+        dialog.resize(520, 480)
+        dialog.setStyleSheet(f"background-color:{ui.BG_DARKEST};")
+        layout = QVBoxLayout(dialog)
+
+        tree = QTreeWidget()
+        tree.setHeaderHidden(True)
+        tree.setStyleSheet(f"""
+            QTreeWidget {{ background-color:{ui.BG_LAYER2}; color:{ui.TEXT_MAIN};
+                border:1px solid {ui.BORDER}; border-radius:{ui.RADIUS}px; }}
+        """)
+
+        def _doldur(ebeveyn, dugum):
+            # klasorler once, sonra dosyalar -- diger agac gorunumleriyle AYNI kural.
+            for isim, deger in sorted(dugum.items(), key=lambda kv: (isinstance(kv[1], tuple), kv[0].lower())):
+                oge = QTreeWidgetItem(ebeveyn, [isim])
+                if isinstance(deger, dict):
+                    oge.setIcon(0, icons.icon("folder", color=ui.ACCENT_TEXT, size=16))
+                    _doldur(oge, deger)
+                else:
+                    inode, _boyut = deger
+                    oge.setIcon(0, icons.icon("file-text", size=16))
+                    oge.setData(0, Qt.ItemDataRole.UserRole, (bolum["offset"], inode, isim))
+
+        for bolum in bolumler:
+            etiket = bolum["description"] or t("tool_tree_whole_image", self.lang)
+            kok_oge = QTreeWidgetItem(tree, [etiket])
+            kok_oge.setIcon(0, icons.icon("hard-drive", color=ui.ACCENT_TEXT, size=16))
+            if bolum["error"]:
+                hata_oge = QTreeWidgetItem(kok_oge, [t("tool_tree_partition_error_fmt", self.lang, exc=bolum["error"])])
+                hata_oge.setIcon(0, icons.icon("alert-triangle", color=ui.WARNING, size=16))
+            else:
+                _doldur(kok_oge, bolum["tree"])
+            kok_oge.setExpanded(True)
+
+        def _cift_tikla(oge, _sutun):
+            veri = oge.data(0, Qt.ItemDataRole.UserRole)
+            if not veri:
+                return
+            offset, inode, isim = veri
+            gecici_yol = os.path.join(tempfile.gettempdir(), f"chameleon_onizleme_{inode}_{isim}")
+            try:
+                disk_tree.extract_file(image_path, offset, inode, gecici_yol)
+                os.startfile(gecici_yol)
+            except OSError as exc:
+                self._log(f"[UYARI] Dosya çıkarılamadı: {exc}", "warn")
 
         tree.itemDoubleClicked.connect(_cift_tikla)
         layout.addWidget(tree)

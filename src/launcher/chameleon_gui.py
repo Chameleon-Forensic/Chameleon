@@ -1193,6 +1193,12 @@ class ChameleonWindow(QMainWindow):
         # kayboluyordu (kullanici bildirdi). Son girilen degerler burada
         # saklanip bir sonraki acilista alanlar bununla ONDOLDURULUYOR.
         self._last_case = {}
+        # "Son Vaka" karti kullanici tarafindan kapatilabilir -- hangi
+        # vakanin (report_path) kapatildigi burada tutuluyor, Ana Sayfa
+        # her acildiginda ayni vaka icin kart tekrar gosterilmiyor. Yeni
+        # bir vaka tamamlaninca (report_path degisince) kart otomatik
+        # geri doner.
+        self._dismissed_recent_case = None
         self._set_window_icon()
         # Sadece hedef-taraf (Bu Cihaz Inceleniyor) modunu iceren, daha
         # hafif/kafa karistirmayan ayri bir .exe icin (bkz. target_kit_main.py
@@ -1871,6 +1877,9 @@ class ChameleonWindow(QMainWindow):
             return None
 
         entry = entries[0]
+        report_path = entry.get("report_path")
+        if report_path is not None and report_path == self._dismissed_recent_case:
+            return None
         lang = self.lang
         status_renk = {"success": ui.SUCCESS, "partial": ui.WARNING, "failed": ui.ERROR}
 
@@ -1890,6 +1899,20 @@ class ChameleonWindow(QMainWindow):
         info_col.addWidget(detay)
         row.addLayout(info_col, stretch=1)
 
+        dismiss_btn = QPushButton()
+        dismiss_btn.setIcon(icons.icon("x", color=ui.TEXT_SECONDARY, size=14))
+        dismiss_btn.setIconSize(dismiss_btn.iconSize().__class__(14, 14))
+        dismiss_btn.setFixedSize(28, 28)
+        dismiss_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        dismiss_btn.setToolTip(t("btn_dismiss_recent_case", lang))
+        dismiss_btn.setStyleSheet(f"""
+            QPushButton {{ border: none; background-color: transparent; border-radius: {ui.RADIUS}px; }}
+            QPushButton:hover {{ background-color: {ui.BG_LAYER2}; }}
+            QPushButton:pressed {{ background-color: {ui.BG_SURFACE}; }}
+        """)
+        dismiss_btn.clicked.connect(lambda _checked=False, p=report_path: self._dismiss_recent_case_card(p))
+        row.addWidget(dismiss_btn)
+
         html_path = entry.get("html_path")
         if html_path and os.path.isfile(html_path):
             open_btn = widgets.SecondaryButton(t("btn_open_report", lang))
@@ -1902,6 +1925,10 @@ class ChameleonWindow(QMainWindow):
 
         card.body.addLayout(row)
         return card
+
+    def _dismiss_recent_case_card(self, report_path):
+        self._dismissed_recent_case = report_path
+        self._show_home()
 
     def _home_card(self, info, handler):
         card = widgets.Card()

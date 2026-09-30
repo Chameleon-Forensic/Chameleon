@@ -63,6 +63,12 @@ a = Analysis(
         "stem", "stem.control", "stem.process", "stem.response", "stem.response.add_onion",
         "cryptography",
         "cryptography.hazmat.primitives.asymmetric.x25519",
+        # engines/ssh_engine/local_collector/disk_tree.py (veri dosyasi olarak
+        # yuklenen local_collector/ altinda, gui_v2.py ile AYNI klasor) pytsk3
+        # kullaniyor -- derlenmis bir C uzantisi (.pyd), entry script'in
+        # dogrudan importlarinda gorunmedigi icin PyInstaller ikili dosyayi
+        # otomatik bulup gomemez (AYNI sinif sorun, bkz. asagidaki QtSvg notu).
+        "pytsk3",
         # ui_kit/icons.py (veri dosyasi olarak yuklenen shared/ altinda,
         # bkz. yukaridaki aciklama) QSvgRenderer kullaniyor -- entry
         # script'in dogrudan importlarinda gorunmedigi icin PyInstaller
