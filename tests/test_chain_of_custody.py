@@ -5,6 +5,8 @@ docs/roadmap.md '4 uzman ajanla kapsamli inceleme'). Bu suit hem 'delil
 kaybi' hem 'sahte kayit enjeksiyonu' senaryolarinin engellendigini
 dogrular."""
 
+import os
+
 import chain_of_custody as coc
 
 
@@ -65,3 +67,140 @@ def test_read_events_returns_empty_list_for_missing_file(tmp_path):
 
 def test_sanitize_log_field_handles_none():
     assert coc._sanitize_log_field(None) is None
+
+
+# ---------------------------------------------------------------------------
+# Hata 1: dosya adi sadece saniye hassasiyetli zaman damgasindan uretiliyordu,
+# PID/UUID gibi bir benzersizlik bileseni yoktu -- iki surec AYNI saniyede
+# baslarsa AYNI dosyaya yazip delillerini karistirabilirdi.
+# ---------------------------------------------------------------------------
+
+def test_log_file_name_includes_pid_for_cross_process_uniqueness(isolated_coc_log, monkeypatch):
+    """Ayni saniyede baslayan iki AYRI surecin (orn. SSH motoru + RAM
+    motoru) ayni case_<timestamp>.log dosyasina yazip olaylarini
+    KARISTIRMAMASI icin dosya adina os.getpid() eklenmis olmali."""
+    sabit_pid = 424242
+    monkeypatch.setattr(coc.os, "getpid", lambda: sabit_pid)
+    monkeypatch.setattr(coc, "_current_log_file", None, raising=False)
+
+    log_path = coc.get_log_file_path()
+    assert str(sabit_pid) in os.path.basename(log_path), (
+        "log dosyasi adinda surec kimligi (PID) bulunmali -- aksi halde "
+        "ayni saniyede baslayan iki surec CARPISABILIR"
+    )
+    # mevcut "case_<tarih-saat>" on-eki BOZULMAMALI
+    assert os.path.basename(log_path).startswith("case_")
+    assert log_path.endswith(".log")
+
+
+class _FakeNow:
+    def strftime(self, _fmt):
+        return "20260101-120000"
+
+
+class _FakeDatetime:
+    @staticmethod
+    def now(_tz):
+        return _FakeNow()
+
+
+def test_two_processes_starting_in_same_second_get_different_log_files(isolated_coc_log, monkeypatch):
+    """Zaman damgasi AYNI kalsa bile (ayni saniyede baslama senaryosu),
+    farkli PID'ler farkli dosya yolu URETMELI."""
+    monkeypatch.setattr(coc, "datetime", _FakeDatetime)
+
+    monkeypatch.setattr(coc.os, "getpid", lambda: 1111)
+    monkeypatch.setattr(coc, "_current_log_file", None, raising=False)
+    yol1 = coc.get_log_file_path()
+
+    monkeypatch.setattr(coc.os, "getpid", lambda: 2222)
+    monkeypatch.setattr(coc, "_current_log_file", None, raising=False)
+    yol2 = coc.get_log_file_path()
+
+    assert yol1 != yol2, "ayni saniyede baslayan farkli surecler AYNI log dosyasini PAYLASMAMALI"
+
+
+# ---------------------------------------------------------------------------
+# Hata 2: get_log_file_path()/read_events(), log_event()'in aksine
+# _get_log_file()'i try/except'siz cagirip bir OSError'i cagirana sizdiriyordu.
+# ---------------------------------------------------------------------------
+
+def test_get_log_file_path_returns_none_instead_of_raising_on_os_error(tmp_path, monkeypatch):
+    """os.makedirs basarisiz olursa (disk dolu/salt-okunur/USB cikarilmis),
+    get_log_file_path() artik OSError FIRLATMAMALI -- None donmeli."""
+    monkeypatch.setattr(coc, "LOG_DIR", str(tmp_path / "yok"))
+    monkeypatch.setattr(coc, "_current_log_file", None, raising=False)
+
+    def patlayan_makedirs(*_args, **_kwargs):
+        raise OSError("disk dolu (simulasyon)")
+
+    monkeypatch.setattr(coc.os, "makedirs", patlayan_makedirs)
+
+    assert coc.get_log_file_path() is None, (
+        "dosya sistemi hatasi cagirana sizdirilmemeli, None donulmeli"
+    )
+
+
+def test_read_events_does_not_raise_when_log_path_cannot_be_determined(tmp_path, monkeypatch):
+    """read_events() (path verilmeden cagrildiginda) get_log_file_path()'in
+    None donmesini de gorulmemis bir hata olmadan ele almali."""
+    monkeypatch.setattr(coc, "LOG_DIR", str(tmp_path / "yok"))
+    monkeypatch.setattr(coc, "_current_log_file", None, raising=False)
+
+    def patlayan_makedirs(*_args, **_kwargs):
+        raise OSError("disk dolu (simulasyon)")
+
+    monkeypatch.setattr(coc.os, "makedirs", patlayan_makedirs)
+
+    assert coc.read_events() == []
+
+
+# ---------------------------------------------------------------------------
+# Hata 3: read_events(), log dosyasi YOKSA "hic olay yok" ile "log'a
+# ulasilamadi" arasindaki farki hic bildirmiyordu (sessizce bos liste).
+# ---------------------------------------------------------------------------
+
+def test_read_events_with_status_distinguishes_missing_file_from_no_events(tmp_path, isolated_coc_log):
+    # Henuz hic log_event() cagrilmadi -- dosya yok, ama BU "hic olay yok"
+    # anlamina gelmeli (log'a ulasilamadi anlamina GELMEMELI).
+    hic_olay_yok = coc.read_events_with_status(log_file_path=str(tmp_path / "hic-yazilmadi.log"))
+    assert hic_olay_yok == {"events": [], "log_file_found": False}, (
+        "dosya hic olusturulmadiysa bu durum acikca 'log_file_found': False "
+        "ile isaretlenmeli -- forensic_report.py bunu 'hic olay yok' ile "
+        "karistirmamali"
+    )
+
+    # Gercekten olay olan (dosya var) durumda log_file_found True olmali.
+    coc.log_event(coc.EVENT_EXAM_START, "test")
+    sonuc = coc.read_events_with_status()
+    assert sonuc["log_file_found"] is True
+    assert len(sonuc["events"]) == 1
+
+
+def test_read_events_backward_compatible_signature_unchanged(isolated_coc_log):
+    """read_events() imzasi/davranisi (bos liste donmesi) DEGISMEMELI --
+    sadece read_events_with_status() ek bilgi tasir."""
+    coc.log_event(coc.EVENT_EXAM_START, "test")
+    assert coc.read_events() == coc.read_events_with_status()["events"]
+
+
+def test_forensic_report_surfaces_log_missing_status(tmp_path, monkeypatch):
+    """forensic_report.to_dict()'in chain_of_custody.log_dosyasi_bulundu
+    alani, log dosyasina ulasilamadiginda False olmali -- incelemeci bos
+    bir events listesinin nedenini raporun KENDISINDEN ayirt edebilsin."""
+    import forensic_report as fr
+
+    monkeypatch.setattr(coc, "LOG_DIR", str(tmp_path / "yok"))
+    monkeypatch.setattr(coc, "_current_log_file", None, raising=False)
+
+    def patlayan_makedirs(*_args, **_kwargs):
+        raise OSError("USB cikarildi (simulasyon)")
+
+    monkeypatch.setattr(coc.os, "makedirs", patlayan_makedirs)
+
+    report = fr.ForensicReport(case_id="V")
+    report.start(engine="ssh_engine", method="disk")
+    d = report.to_dict()
+
+    assert d["chain_of_custody"]["log_dosyasi_bulundu"] is False
+    assert d["chain_of_custody"]["events"] == []

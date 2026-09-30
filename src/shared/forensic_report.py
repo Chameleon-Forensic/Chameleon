@@ -196,11 +196,12 @@ class ForensicReport:
 
     def to_dict(self):
         coc_log_path = coc.get_log_file_path()
-        events = coc.read_events(
+        coc_result = coc.read_events_with_status(
             log_file_path=coc_log_path,
             start_time_utc=self.start_time_utc,
             end_time_utc=self.end_time_utc,
         )
+        events = coc_result["events"]
         return {
             "report_version": "1.0",
             "tool": {"name": TOOL_NAME, "version": TOOL_VERSION, "engine": self.engine, "method": self.method},
@@ -244,6 +245,12 @@ class ForensicReport:
             },
             "chain_of_custody": {
                 "log_file": coc_log_path,
+                # Bos bir "events" listesinin "hic olay olmadi" mi yoksa
+                # "log dosyasina ulasilamadi" (silinmis/USB cikarilmis/
+                # okuma hatasi) mi oldugunu incelemecinin raporun
+                # KENDISINDEN ayirt edebilmesi icin (bkz.
+                # chain_of_custody.read_events_with_status()).
+                "log_dosyasi_bulundu": coc_result["log_file_found"],
                 "events": events,
             },
         }
@@ -268,6 +275,16 @@ class ForensicReport:
             for e in d["chain_of_custody"]["events"]
         )
         basarisiz = "".join(f"<li>{esc(x)}</li>" for x in d["result"]["failed_items"]) or "<li>—</li>"
+        # Bos bir olay listesinin "hic olay olmadi" ile "log dosyasina
+        # ulasilamadi" (silinmis/USB cikarilmis/okuma hatasi) arasindaki
+        # farki raporu okuyan insana da acikca gostermek icin -- bkz.
+        # chain_of_custody.read_events_with_status().
+        log_uyarisi = (
+            '<div style="color:#A64545; font-weight:600; margin-top:8px;">'
+            "⚠ Log dosyasına ulaşılamadı — aşağıdaki liste eksik olabilir, "
+            "bu \"hiç olay yok\" anlamına GELMEZ.</div>"
+            if not d["chain_of_custody"]["log_dosyasi_bulundu"] else ""
+        )
 
         return f"""<!DOCTYPE html>
 <html lang="tr"><head><meta charset="utf-8">
@@ -330,6 +347,7 @@ class ForensicReport:
   </div>
 
   <h2>Delil Zinciri (Chain of Custody)</h2>
+  {log_uyarisi}
   <table>
     <tr><th>Zaman (UTC)</th><th>Olay</th><th>Açıklama</th><th>Hash</th></tr>
     {satirlar}
@@ -527,6 +545,15 @@ def export_pdf(report_json_path, pdf_path):
 
         Paragraph("Delil Zinciri (Chain of Custody)", h2),
     ]
+
+    # Eski (bu alan eklenmeden ONCE kaydedilmis) report.json'larda bu
+    # anahtar hic olmayabilir -- .get(..., True) ile geriye donuk uyumlu:
+    # bilinmiyorsa uyari GOSTERME (yanlis pozitif vermemek icin).
+    if d.get("chain_of_custody", {}).get("log_dosyasi_bulundu", True) is False:
+        story.append(Paragraph(
+            '<font color="#A64545"><b>Log dosyasına ulaşılamadı — aşağıdaki liste '
+            'eksik olabilir, bu "hiç olay yok" anlamına GELMEZ.</b></font>', body,
+        ))
 
     events = d.get("chain_of_custody", {}).get("events") or []
     header_row = [Paragraph(f"<b>{h}</b>", body) for h in ("Zaman (UTC)", "Olay", "Açıklama", "Hash")]
