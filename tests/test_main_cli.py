@@ -50,6 +50,65 @@ def test_select_windows_disk_number_validates_int(monkeypatch):
     assert main.select_windows_disk_number() == 3
 
 
+def test_get_ssh_connection_rejects_non_numeric_port_and_retries(monkeypatch):
+    """Satir ~36: SSH Port sorusuna sayisal olmayan bir deger girilirse
+    (orn. 'abc' ya da bosluklu bir deger) program cokmemeli,
+    select_windows_disk_number() ile AYNI desende tekrar sormali."""
+    _girdi_sirasi(
+        monkeypatch,
+        "1.2.3.4",  # host
+        "abc",  # gecersiz port (1. deneme)
+        "2222",  # gecerli port (2. deneme)
+        "root",  # username
+        "2",  # auth: SSH Key
+        "/home/user/.ssh/id_rsa",  # key_path
+    )
+    baglanti = main.get_ssh_connection()
+    assert baglanti.port == 2222
+
+
+def test_get_ssh_connection_blank_port_uses_default(monkeypatch):
+    _girdi_sirasi(
+        monkeypatch,
+        "1.2.3.4", "", "root", "2", "/home/user/.ssh/id_rsa",
+    )
+    baglanti = main.get_ssh_connection()
+    assert baglanti.port == 22
+
+
+def test_parse_lsblk_names_ignores_tree_chars_and_other_columns():
+    """Satir ~96: select_disk gercek NAME kolonuna karsi tam eslesme
+    yapmali -- SIZE/MODEL/SERIAL kolonlarindaki bir substring ya da
+    lsblk'nin agac-cizim karakterleri ('├─', '└─') sahte bir eslesme
+    URETMEMELI."""
+    disks_output = (
+        "NAME   SIZE TYPE FSTYPE MOUNTPOINT MODEL          SERIAL\n"
+        "sda     500G disk\n"
+        "├─sda1  500M part  vfat   /boot/efi\n"
+        "└─sda2  499G part  ext4   /\n"
+        "sdb     1T   disk                   Samsung_500GB  ABC123\n"
+    )
+    isimler = main._parse_lsblk_names(disks_output)
+    assert isimler == ["sda", "sda1", "sda2", "sdb"]
+    # "500" SIZE kolonunda gecen bir alt string; NAME olarak gecerli DEGIL.
+    assert "500" not in isimler
+    # "sd" gercek bir NAME'in on eki; tam eslesme olmadan kabul edilmemeli.
+    assert "sd" not in isimler
+
+
+def test_select_disk_rejects_substring_match(monkeypatch, capsys):
+    """select_disk, 'sda' ve 'sdb' listelenmisken kisa/kismi bir string
+    (orn. 'sd') veya baska bir kolondan gelen bir deger (orn. '500')
+    OLMAYAN bir cihazi 'dogrulandi' diye KABUL ETMEMELI."""
+    disks_output = "NAME SIZE TYPE\nsda  500G disk\nsdb  1T   disk\n"
+    _girdi_sirasi(monkeypatch, "sd", "500", "sdb")
+    sonuc = main.select_disk(disks_output)
+    assert sonuc == "/dev/sdb"
+    cikti = capsys.readouterr().out
+    assert "'sd' listede bulunamadi" in cikti
+    assert "'500' listede bulunamadi" in cikti
+
+
 def test_handle_disk_acquisition_linux_calls_linux_engine(monkeypatch, tmp_path):
     yakalanan = {}
 
