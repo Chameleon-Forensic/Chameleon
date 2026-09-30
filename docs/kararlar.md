@@ -219,3 +219,34 @@ sonuç: ertelendi" notuyla).
 kurulum kullanıcının kendi makinesinde ayrı onayla yapılır" ilkesiyle
 tutarlı, ama burada zaten önerilen bir kurulum adımı da yok (yön kararı
 "ertelemek" olduğu için).
+
+---
+
+## 2026-09-30 — Cloud oturumlarında otonom çalışma + CLAUDE.md'nin gitignore çelişkisi
+
+**Durum:** Kullanıcı, cloud oturumlarında geliştirmenin sorulmadan
+devam etmesini, karşılaşılan her ikilemde benim karar vermemi ve
+verdiğim kararlarla çözemeden bıraktığım ikilemleri bir md dosyasına
+yazmamı istedi.
+
+**Karar:** Bu pratiği `CLAUDE.md`'ye (proje kök dizini) yazmayı
+denedim, ama `.gitignore` bunu bilinçli olarak dışlıyor ("AI
+oturum/geliştirme notları ... sadece Claude'un/geliştiricinin kendi
+referansı için tutuluyor, public repoya gitmiyor" — `docs/ogrenilenler.md`,
+`docs/oturum_ozeti.md`, `docs/hatalar_ve_sonuclar.md` ile aynı grupta).
+Cloud oturumları her seferinde repoyu sıfırdan klonladığı için,
+commit'lenmeyen bir dosya bir sonraki oturuma hiç taşınmaz — yani bu
+talimatı CLAUDE.md'ye yazmak pratikte onu unutmak anlamına gelirdi.
+Bunun yerine talimatı, zaten aynı amaca hizmet eden ve TAKİP EDİLEN
+(gitignore'da olmayan) bu dosyaya (`docs/kararlar.md`) ekledim; ayrıca
+kök dizine `CLAUDE.md` de bıraktım (yerel/geliştirici referansı olarak,
+proje kuralına uygun şekilde commit'lenmeden).
+
+**Sonuç olarak yürürlükteki kural:** Cloud oturumlarında birden fazla
+makul seçenek olan her noktada kullanıcıya sormadan en uygun seçeneği
+seçip devam et. Her karar (hangi seçenekler değerlendirildi, hangisi
+seçildi, neden) ve gerçekten kullanıcıya sorulması gereken/kendi
+başına güvenle karara bağlanamayan açık ikilemler bu dosyaya
+(`docs/kararlar.md`) eklenir. İstisna: force push, branch silme gibi
+geri dönüşü zor git işlemleri hâlâ kullanıcıya sorulur, otonomi bunları
+kapsamıyor.
