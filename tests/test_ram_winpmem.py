@@ -50,7 +50,10 @@ def test_full_mode_elevates_with_hidden_window(qapp, tmp_path, monkeypatch):
     class _SahteWindll:
         shell32 = _SahteShell32()
 
-    monkeypatch.setattr(rg.ctypes, "windll", _SahteWindll())
+    # raising=False: ctypes.windll sadece gercek Windows'ta var -- bu test
+    # Linux/macOS'ta da (CI/cloud dahil) calisabilsin diye modul burada
+    # olmayan bu ozniteligi de kabul ediyor.
+    monkeypatch.setattr(rg.ctypes, "windll", _SahteWindll(), raising=False)
     monkeypatch.setattr(rg.time, "sleep", lambda *_a: None)
     # coc/incomplete_ops/ForensicReport gercek dosyalara yazmasin diye
     # devre disi birakiliyor -- bu test SADECE ShellExecuteW'e verilen

@@ -250,3 +250,42 @@ başına güvenle karara bağlanamayan açık ikilemler bu dosyaya
 (`docs/kararlar.md`) eklenir. İstisna: force push, branch silme gibi
 geri dönüşü zor git işlemleri hâlâ kullanıcıya sorulur, otonomi bunları
 kapsamıyor.
+
+---
+
+## 2026-09-30 — Taşınabilir kit / Linux hedef desteği: gömülü Tor binary'si ağ politikası tarafından engellendi (AÇIK İKİLEM)
+
+**Durum:** Roadmap'teki "Sırada" listesinde taşınabilir kitin Linux
+hedef desteği eksik olarak not edilmiş, tek sebebiyle: "gömülü Tor
+binary'si Windows x86_64" (bkz. `docs/roadmap.md`, madde 1). Kodun
+kendisi (`shared/tor_binary.py`, `engines/portable_kit/tor_manager.py`)
+zaten platformdan bağımsız yazılmış — `platform.system()`'a göre
+`shared/bin/tor/<platform>/tor(.exe)` arıyor, hiçbir Linux'a özel kod
+değişikliği gerekmiyor. Tek eksik: `shared/bin/tor/linux/tor` dosyasının
+kendisi (resmi Tor Project "Expert Bundle", Linux x86_64).
+
+**Denendi:** Bu binary'yi resmi kaynaktan (`dist.torproject.org`)
+indirip hash doğrulamasıyla eklemeyi denedim (Windows binary'si için
+önceki oturumda aynı yöntem kullanılmıştı). **Bu cloud ortamının ağ
+politikası bu host'a erişimi engelliyor** (`curl` `403` ile reddedildi
+— agent proxy'nin izin verdiği domain listesinde yok).
+
+**Neden kullanıcıya bırakıldı (kendi başıma çözemedim):** Bu ortamın
+ağ erişimi ortam ayarlarından genişletilebilir (izin verilen domain
+listesine `dist.torproject.org` eklenerek) ama bu bir ortam
+YAPILANDIRMA değişikliği — benim kendi kararımla yapabileceğim bir şey
+değil (kullanıcının/organizasyonun ortam ayarına dokunmak gerekiyor).
+
+**Kullanıcı için seçenekler:**
+1. Bu cloud ortamının ağ erişim ayarından `dist.torproject.org`'u
+   (veya daha genel bir erişim seviyesini) izinli domain listesine
+   ekleyip beni tekrar denetmemi isteyebilir.
+2. Kendi makinesinde resmi Tor Project "Expert Bundle" (Linux x86_64)
+   indirip hash'ini doğrulayıp `shared/bin/tor/linux/tor` olarak
+   ekleyebilir (Windows binary'si nasıl eklendiyse aynı şekilde).
+3. Bu maddeyi şimdilik ertelenmiş bırakabilir (roadmap'te zaten
+   "Linux hedef desteği ayrı bir adım" diye not edilmiş durumda).
+
+Kodda değişiklik gerekmediği, sadece dosya eksikliği olduğu için, bu
+madde şimdilik AÇIK bırakıldı — kullanıcı bir seçim yapana kadar kod
+tarafında yapılacak bir şey yok.
