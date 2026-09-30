@@ -157,3 +157,65 @@ Visual Studio Build Tools'u kurup (onaylayarak), sonra
 `scripts/build_libewf_windows.ps1`'i çalıştırıp, `docs/ewf_derleme_rehberi.md`
 bölüm (d)'deki test script'iyle doğrulayıp, ardından (ayrı bir adımda)
 bölüm (e)'deki entegrasyon planını uygulamalı.
+
+---
+
+## 2026-09-30 — AFF4 desteği: hangi yön izlenecek
+
+**Durum:** `docs/roadmap.md`'deki "Daha sonra" maddesi AFF4'ü hiç
+araştırılmamış olarak işaretliyordu. Önceki bir oturumdan gelen ipucu
+("WinPmem'in native AFF4 desteği var, kullanılabilir olabilir")
+doğrulanmak üzere derinlemesine araştırıldı. Tam bulgular:
+`docs/aff4_arastirmasi.md`.
+
+**Değerlendirilen seçenekler:**
+
+1. **WinPmem'in native AFF4 çıktısını kullanmak** (ipucunun önerdiği
+   yol) — resmi `Velocidex/WinPmem` deposu (README + Release notları)
+   incelenip, Chameleon'un gömdüğü GERÇEK binary'yle (`go-winpmem_
+   amd64_1.0-rc2_signed.exe`) çapraz kontrol edildi. Sonuç: **ipucu bu
+   sürüm için YANLIŞ**. Upstream'in kendi ifadesiyle, go-winpmem
+   "plain simple imager - it can only produce images in RAW format"
+   ve eski AFF4 tabanlı imager "yet to be updated to the new driver"
+   (yani henüz mevcut değil). go-winpmem ayrıca imzasızlık sorunu
+   yüzünden üretim için ÖNERİLEN TEK sürüm — yani "eski, AFF4 destekli
+   ama imzasız/güncel olmayan sürücüyle çalışan sürümü kullan" seçeneği
+   de yok. Bu yol tamamen kapalı, upstream'in kendi TODO'su.
+2. **`pyaff4` (PyPI, saf Python, Apache-2.0)** — kurulumu EWF'den daha
+   kolay (derlenmiş uzantı yok, Windows'ta VS Build Tools gerekmez) ama
+   hem PyPI paketi (2021'den beri güncellenmemiş, güncel kod GitHub'da
+   olsa da PyPI'ya yayınlanmamış) hem de daha önemlisi **projenin kendi
+   README'sinin açıkça belirttiği gibi yazma desteği şu an bozuk**
+   ("write support in the libraries is currently broken and being
+   worked on").
+3. **`c-aff4` (Velocidex, C++, `aff4imager` CLI)** — yazma teorik olarak
+   var ama proje fiilen terk edilmiş (3+ yıl commit yok, 7+ yıldır "RC"
+   etiketinden çıkamamış sürüm, resmi Windows binary yayını yok) VE
+   kendi README'si AFF4 standardının Hashing (Bölüm 6) kısmını hiç
+   uygulamadığını itiraf ediyor — bir adli aracın bütünlük doğrulama
+   olmadan kullanılması kabul edilemez.
+4. **AFF4'ü şimdilik tamamen ertelemek**, sadece bulguları belgeleyip
+   roadmap'i güncellemek.
+
+**Seçilen: Seçenek 4 (ertelemek).** Gerekçe: EWF kararında kurulan
+standart ("resmi, izlenebilir, GÜNCEL kaynaklı, gerçekten çalışan bir
+yazma yolu") burada hiçbir adayla karşılanmıyor — WinPmem yolu upstream
+tarafından kapalı, pyaff4 yazma konusunda kendi beyanıyla güvenilmez,
+c-aff4 terk edilmiş ve hash doğrulamasını hiç uygulamıyor. EWF'nin
+engeli (tek eksik özellik, aktif/bakımlı bir kütüphanede) ile AFF4'ün
+engeli (kütüphanelerin kendisi bu işi henüz güvenilir yapmıyor) FARKLI
+sınıfta sorunlar — EWF'de olduğu gibi "kendi derleyip belgeleriz" gibi
+bir orta yol burada yok, çünkü sorun derleme değil, üst akış
+kütüphanesinin yazma yolunun kendisi. Ek fatura/maliyet getirmeden
+(ücretli servis/lisans yok) ilerleyebilecek bir seçenek de yok — tek
+makul sonraki adım, pyaff4'ün yazma desteği upstream'de gerçekten
+düzelip PyPI'ya yeniden yayınlandığında (ya da c-aff4 yeniden
+canlanıp resmi bir Windows binary + hash desteği çıkardığında) konuyu
+tekrar açmak. `docs/roadmap.md` buna göre güncellendi ("araştırıldı,
+sonuç: ertelendi" notuyla).
+
+**Not:** Hiçbir paket kurulmadı/denenmedi (`pip install pyaff4` dahil)
+— bu tamamen araştırma + dokümantasyon oturumu, EWF'deki "gerçek
+kurulum kullanıcının kendi makinesinde ayrı onayla yapılır" ilkesiyle
+tutarlı, ama burada zaten önerilen bir kurulum adımı da yok (yön kararı
+"ertelemek" olduğu için).
