@@ -186,6 +186,33 @@ def test_local_mode_refuses_output_on_source_or_without_admin(qapp, monkeypatch)
         qapp.processEvents()
 
 
+def test_local_mode_refuses_when_root_disk_unknown(qapp, monkeypatch, isolated_coc_log):
+    """HATA 1 regresyonu (GUI ucu): mantiksal/dosya modunda kok yolun diski
+    belirlenemediginde eski `check_root_output_separate` None donuyordu ve
+    `_local_precheck` None'ı 'sorun yok' sayip imaja baslatmana izin
+    veriyordu. Artik fonksiyon fail-CLOSED `output_disk_unknown` dondugu icin
+    GUI de imaj BASLAMADAN reddetmeli."""
+    from strings import t
+    import local_connector as lc
+    widget = gui_v2.ForensicWidget(initial_connection_method="local", lang="en")
+    qapp.processEvents()
+    hatalar = []
+    monkeypatch.setattr(widget, "_show_error", hatalar.append)
+    try:
+        # kok yolun diski belirlenemiyor (PowerShell/partition hatasi simulasyonu)
+        monkeypatch.setattr(lc, "_disk_number_for_letter", lambda ssh, harf: None)
+        assert widget._local_precheck(root_path="C:\\", out_path="D:\\x") is False
+        assert hatalar[-1] == t("tool_local_err_output_unknown", "en")
+        # diski belirlenebilen normal durum degismemeli
+        monkeypatch.setattr(lc, "_disk_number_for_letter", lambda ssh, harf: {"C": 0, "D": 1}.get(harf.upper()))
+        assert widget._local_precheck(root_path="C:\\", out_path="D:\\x") is True
+        assert widget._local_precheck(root_path="C:\\", out_path="C:\\x") is False
+        assert hatalar[-1] == t("tool_local_err_output_on_source", "en")
+    finally:
+        widget.deleteLater()
+        qapp.processEvents()
+
+
 @pytest.mark.parametrize("lang", LANGUAGES)
 def test_ram_engine_widget_builds_in_every_language(qapp, lang):
     widget = ram_gui.RamEngineWidget(lang=lang)
