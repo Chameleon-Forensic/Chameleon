@@ -755,6 +755,10 @@ class AcquisitionWorker(QThread):
             target_host=c["host"], source_identifier=f"PhysicalDrive{disk_number}", acquisition_type=mode,
             source_description=disk_description,
         )
+        # Linux kolundaki AYNI degisken -- Windows kolu birlestirme sonrasi
+        # `segments` kullanıyor (hash ve log akisi); tanimlanmamis olsaydi
+        # imaj BASHARIYLA bittikten sonra NameError ile rapor kaybedilirdi.
+        segments = None
         try:
             apply_wb = (mode == "offline")
 
@@ -879,31 +883,58 @@ class AcquisitionWorker(QThread):
                     self.log.emit("[BİLGİ] İşlem yarım kaldı. Daha sonra aynı diski seçip devam edebilirsiniz.", None)
                 return
 
-            self.log.emit("\n[+] Bloklar birleştiriliyor...", "info")
-            imaj_yolu = concatenate_blocks(
-                sonuc["block_paths"], sonuc["total_blocks"],
-                output_dir=sonuc["output_dir"], output_path=out_path, cleanup=(mode != "live"),
-            )
-            if imaj_yolu is None:
-                if report:
-                    report.finish(
-                        status="failed", output_path=out_path,
-                        failed_items=[str(b) for b in sonuc.get("failed_blocks", [])],
-                    )
-                    self._save_report(report, sonuc.get("output_dir") or os.path.dirname(out_path) or ".")
-                self.log.emit("[HATA] Eksik bloklar nedeniyle imaj birleştirilemedi.", None)
-                return
+            # bkz. Linux kolundaki AYNI akis -- segment_size_bytes GUI'de
+            # secilebiliyor ve _start_disk_windows ctx'e koyuyor ama kol
+            # icinde HIC kontrol edilmiyordu: kullanici "2 GB segment"
+            # secse bile sessizce tek dosya birlestiriliyordu (bui bir
+            # sessiz ozellik kaybiydi, simdi Linux ile ayni akis).
+            segments = None
+            if segment_size_bytes:
+                self.log.emit("\n[+] Bloklar segmentlere bölünüyor...", "info")
+                segments = write_segments(
+                    sonuc["block_paths"], sonuc["total_blocks"], segment_size_bytes,
+                    output_dir=sonuc["output_dir"],
+                    output_basename=os.path.splitext(os.path.basename(out_path))[0],
+                    cleanup=(mode != "live"),
+                )
+                if segments is None:
+                    if report:
+                        report.finish(
+                            status="failed", output_path=out_path,
+                            failed_items=[str(b) for b in sonuc.get("failed_blocks", [])],
+                        )
+                        self._save_report(report, sonuc.get("output_dir") or os.path.dirname(out_path) or ".")
+                    self.log.emit("[HATA] Eksik bloklar nedeniyle segmentli imaj oluşturulamadı.", None)
+                    return
+                imaj_yolu = segments[0]
+                self.log.emit(f"[BAŞARILI] İmaj {len(segments)} segmente bölündü: {imaj_yolu} (+{len(segments) - 1} diğer)", None)
+                hashes = hash_files_multi(segments)
+            else:
+                self.log.emit("\n[+] Bloklar birleştiriliyor...", "info")
+                imaj_yolu = concatenate_blocks(
+                    sonuc["block_paths"], sonuc["total_blocks"],
+                    output_dir=sonuc["output_dir"], output_path=out_path, cleanup=(mode != "live"),
+                )
+                if imaj_yolu is None:
+                    if report:
+                        report.finish(
+                            status="failed", output_path=out_path,
+                            failed_items=[str(b) for b in sonuc.get("failed_blocks", [])],
+                        )
+                        self._save_report(report, sonuc.get("output_dir") or os.path.dirname(out_path) or ".")
+                    self.log.emit("[HATA] Eksik bloklar nedeniyle imaj birleştirilemedi.", None)
+                    return
 
-            self.log.emit(f"[BAŞARILI] İmaj birleştirildi: {imaj_yolu}", None)
-            # SHA-256 + MD5 + SHA-1 TEK okuma gecisinde birlikte hesaplanir
-            # (bkz. forensic_report.finish()'teki AYNI gerekce) -- sikistirma
-            # varsa bile bu HAM (henuz sikistirilmamis) icerik uzerinde
-            # yapilir, cunku rapordaki butunluk degeri her zaman ham
-            # icerige ait kalmali.
-            hashes = hash_file_multi(imaj_yolu)
+                self.log.emit(f"[BAŞARILI] İmaj birleştirildi: {imaj_yolu}", None)
+                # SHA-256 + MD5 + SHA-1 TEK okuma gecisinde birlikte hesaplanir
+                # (bkz. forensic_report.finish()'teki AYNI gerekce) -- sikistirma
+                # varsa bile bu HAM (henuz sikistirilmamis) icerik uzerinde
+                # yapilir, cunku rapordaki butunluk degeri her zaman ham
+                # icerige ait kalmali.
+                hashes = hash_file_multi(imaj_yolu)
             master_hash = hashes.get("sha256")
             self.log.emit(f"[+] Yerel master SHA-256: {master_hash}", "info")
-            raw_bytes = os.path.getsize(imaj_yolu)
+            raw_bytes = sum(os.path.getsize(s) for s in segments) if segments else os.path.getsize(imaj_yolu)
 
             if compress and not segments:
                 self.log.emit("[i] İmaj gzip ile sıkıştırılıyor (bu biraz sürebilir)...", "info")
