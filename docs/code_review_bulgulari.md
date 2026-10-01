@@ -9,6 +9,7 @@
 
 1. `src/engines/ram_engine/ram_gui.py` — RAM motoru GUI'si + WinPmem çağırma mantığı
 2. `src/shared/incomplete_ops.py` — "Yarım Kalanlar" JSON kayıt defteri
+3. `src/engines/ssh_engine/local_collector/gui_v2.py` — worker thread sınıfları (ConnectWorker / AcquisitionWorker / VerifyWorker) ve sinyal/slot bağlantıları
 
 ---
 
@@ -119,6 +120,56 @@
 
 ---
 
+## 3. `gui_v2.py` — worker thread'ler (ConnectWorker / AcquisitionWorker / VerifyWorker)
+
+### Bulgu 3.1 — [KRİTİK] `_run_windows_disk`: `segments` NameError, başarı akışında rapor kaybı
+
+- **Sorun:** Windows disk kolu, Linux koluyla BİREBİR aynı birleştirme/hash/log
+  akışını kullanıyor ama `segments` değişkenini SADECE Linux kolu
+  tanımlıyordu. Windows disk imajı BAŞARIYLA bitince
+  `raw_bytes = ... if segments else ...` satırı `NameError` fırlatıyordu;
+  geniş `except Exception` bunu yutup sadece traceback logluyordu. Sonuç:
+  rapor HİÇ kaydedilmiyor, "İmaj alma tamamlandı" durumu gösterilmiyor,
+  kullanıcının eline imaj dosyası geçiyor ama raporu/hash kaydı YOK —
+  adli araçta bu, delil zinciri kopması demek.
+- **Düzeltme:** Kolun başında `segments = None` başlatması eklendi.
+- **Regresyon:** `test_windows_disk_success_flow_does_not_hit_nameerror` —
+  mock'lu tam başarı akışı, NameError olmadan rapor üretir.
+
+### Bulgu 3.2 — Windows kolunda segment (bölünmüş imaj) özelliği sessizce yoktu
+
+- **Sorun:** `segment_size_bytes` GUI'de seçilebiliyor ve
+  `_start_disk_windows` ctx'e koyuyordu, ama `_run_windows_disk` içinde
+  HİÇ kontrol edilmiyordu — kullanıcı "650 MB / 2 GB / 4 GB segment"
+  seçse bile sessizce tek dosya birleştiriliyordu. Linux'ta çalışan
+  özelliğin Windows'ta sessiz kaybı (kullanıcı seçimine güvenilmiyordu).
+- **Düzeltme:** Linux kolundaki birebir segment akışı Windows koluna da
+  eklendi (`write_segments` çağrısı, başarısızlıkta failed raporu,
+  `hash_files_multi`, `raw_bytes` hesabı, doğrulama atlama logu).
+- **Regresyon:** `test_windows_disk_with_segments_flow_also_works`
+  (segment seçilince write_segments GERÇEKTEN çağrılıyor — eski kodda
+  çağrılmıyordu) + `test_windows_disk_segments_none_keeps_concatenate_flow`
+  (varsayılan akış bozulmadı).
+
+### Değerlendirilip DOKUNULMAYAN bulgular (bilinçli karar)
+
+- `_on_worker_ask_yesno`, worker'ın instance niteliklerine cevap yazıyor
+  (`_yesno_result`/`_yesno_event`) — widget kapatılıp yeniden açılırsa
+  cevap eski worker'a yazılabilir, ama mevcut tek-pencere mimaride bu
+  senaryo pratik olarak erişilemez (roadmap'te not, dokunulmadı).
+- `_on_connected`, `ssh.list_disks()`'i UI thread'inde çağırıyor — yavaş
+  bağlantıda UI kısa süre donabilir; bu bilinçli bir sadelik tercihi
+  (ayrı worker'a almak bağlantı akışını 3 parçaya böler), raporlandı ama
+  değiştirilmedi.
+- `StdoutRedirector` ve `_ask_yesno_blocking` (threading.Event deseni)
+  incelendi, doğru — dokunulmadı.
+
+**Sonuç:** `tests/test_gui_v2_windows_segments.py` 3/3 + mevcut
+`test_acquisition_worker.py` 9/9 geçti; tüm suite 264 geçti (baseline
+2 ilgisiz Windows-symlink-yetkisi fail'i dışında).
+
+---
+
 ## Değiştirilen Dosyalar
 
 | Dosya | Değişiklik |
@@ -127,7 +178,9 @@
 | `tests/test_ram_winpmem.py` | Bozuk test yeniden yazıldı + 1 yeni test |
 | `src/shared/incomplete_ops.py` | Lock + atomik yazma + logging + tip güvenliği |
 | `tests/test_incomplete_ops.py` | Yeni: 13 regresyon testi |
-| `docs/roadmap.md` | "Yapıldı" listesine 2 madde (bu dosyadaki özetlerin kısaltılmışı) |
+| `src/engines/ssh_engine/local_collector/gui_v2.py` | Windows kolu segments NameError + eksik segment akışı |
+| `tests/test_gui_v2_windows_segments.py` | Yeni: 3 regresyon testi |
+| `docs/roadmap.md` | "Yapıldı" listesine review maddeleri |
 | `docs/code_review_bulgulari.md` | Bu rapor (yeni) |
 
 ## Test Komutu
