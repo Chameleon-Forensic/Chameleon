@@ -17,10 +17,26 @@ gorur.
 """
 
 import json
+import logging
 import os
 import sys
+import threading
 import uuid
 from datetime import datetime, timezone
+
+_logger = logging.getLogger(__name__)
+
+_LOCK = threading.Lock()
+
+# Kayıt defteri dosyası, okuma/yazma işlemleri _LOCK ile korunur.
+# Birden fazla thread (Qt worker'ları vb.) aynı anda record_start /
+# record_finish / list_incomplete çağrıldığında read-modify-write
+# yarış koşulunu (race condition) engellemek için kullanılır.
+
+# Geçici dosya üzerinden yazıp ardından kaldıra ('os.replace' — atomic
+# taşınma) ile WRITE sırasında yarım dosya bırakılmasını önler.
+_WIP_SUFFIX = ".incomplete_ops.json.tmp"
+
 
 # Vaka gecmisi/organizasyon verisiyle AYNI kalici konum (bkz.
 # forensic_report.HISTORY_DIR'deki ayni gerekce) -- derlenmis modda
@@ -34,20 +50,65 @@ REGISTRY_PATH = os.path.join(DATA_DIR, "incomplete_ops.json")
 
 
 def _read_all():
+    """Kayıt defterini okur; bozuk JSON veya dosya yoksa boş dict döner.
+
+    Döndürülen dict, aynı anda birden fazla çağrıcınınregistry'ye
+    müdahale etmesini engellemek için kopyadır (shallow copy).
+    """
     try:
         with open(REGISTRY_PATH, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except (OSError, json.JSONDecodeError):
+            data = json.load(f)
+    except FileNotFoundError:
         return {}
+    except OSError:
+        return {}
+    except json.JSONDecodeError:
+        _logger.warning(
+            "incomplete_ops.json bozuk veya geçersiz — boş kayıt defteriyle "
+            "devam ediliyor (mevcut kayıtlar kaybediliyor)."
+        )
+        return {}
+    if not isinstance(data, dict):
+        _logger.warning(
+            "incomplete_ops.json beklenmedik bir tip içeriyor — "
+            "boş kayıt defteriyle devam ediliyor."
+        )
+        return {}
+    # Çağrıyı yapan tarafın döndürüleni yanlışlıkla özkaynağı
+    # değiştirmesini engellemek için kopya dön.
+    return dict(data)
 
 
 def _write_all(kayitlar):
+    """Kayıt defterini *atomic* şekilde yazar (geçici dosya + os.replace).
+
+    Aynı anda birden fazla işlemin dosyaya yazması durumunda oluşabilecek
+    yarım/garip bir JSON dosyası bırakılmasını önler.
+    """
     try:
         os.makedirs(DATA_DIR, exist_ok=True)
-        with open(REGISTRY_PATH, "w", encoding="utf-8") as f:
-            json.dump(kayitlar, f, indent=2, ensure_ascii=False)
     except OSError:
-        pass
+        _logger.warning(
+            "incomplete_ops.json kayıt klasörü oluşturulamadı — "
+            "kayıtlar kaydedilemiyor."
+        )
+        return
+    tmp_path = REGISTRY_PATH + _WIP_SUFFIX
+    try:
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(kayitlar, f, indent=2, ensure_ascii=False)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, REGISTRY_PATH)
+    except OSError as exc:
+        _logger.warning(
+            "incomplete_ops.json kaydı yazılamadı: %s", exc
+        )
+        # Geçici dosya artık varsa temizle (k Urban, boş zip klasörü gibi).
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
 
 
 def record_start(kind, label, details=None):
@@ -59,27 +120,46 @@ def record_start(kind, label, details=None):
     gerekebilecek her sey). Donen id, record_finish() icin saklanmali.
     """
     op_id = uuid.uuid4().hex[:12]
-    kayitlar = _read_all()
-    kayitlar[op_id] = {
-        "kind": kind,
-        "label": label,
-        "details": details or {},
-        "started_at_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-    }
-    _write_all(kayitlar)
+    with _LOCK:
+        kayitlar = _read_all()
+        if op_id in kayitlar:
+            # Çokatik, ama uuid4 hex[:12] çakışma ihtimali çok düşük;
+            # güvenlik/kaçak kayıt yaratmamak için yeniden denen.
+            op_id = uuid.uuid4().hex[:12]
+            kayitlar[op_id] = {
+                "kind": kind,
+                "label": label,
+                "details": details or {},
+                "started_at_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            }
+        else:
+            kayitlar[op_id] = {
+                "kind": kind,
+                "label": label,
+                "details": details or {},
+                "started_at_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            }
+        _write_all(kayitlar)
     return op_id
 
 
 def record_finish(op_id):
-    """Islem (basarili ya da basarisiz) BITINCE cagrilir -- kaydi kaldirir."""
-    if not op_id:
+    """Islem (basarili ya da basarisiz) BITINCE cagrilir -- kaydi kaldirir.
+
+    op_id string olmali (record_start tarafından döndürülen UUID-hex).
+    None, False, 0 gibi false-yapici değerler (ve bos string) desteklenmez;
+    bunlar için sessizce dönülür.
+    """
+    if not isinstance(op_id, str) or not op_id:
         return
-    kayitlar = _read_all()
-    if op_id in kayitlar:
-        del kayitlar[op_id]
-        _write_all(kayitlar)
+    with _LOCK:
+        kayitlar = _read_all()
+        if op_id in kayitlar:
+            del kayitlar[op_id]
+            _write_all(kayitlar)
 
 
 def list_incomplete():
     """Hala acik (islem bitmeden birakilmis) tum kayitlari (id, veri) olarak dondurur."""
-    return list(_read_all().items())
+    with _LOCK:
+        return list(_read_all().items())
