@@ -245,6 +245,7 @@ class RamWorker(QThread):
 
         try:
             self.log.emit(f"$ {' '.join(args)}")
+            proc = None  # Popen'in kendisi OSError fırlatırsa proc atanmamış kalmasın
             try:
                 proc = subprocess.Popen(
                     args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -255,6 +256,13 @@ class RamWorker(QThread):
                 exit_code = proc.wait()
             except OSError as exc:
                 self.log.emit(f"Başlatılamadı: {exc}")
+                # Süreç başladıysa (okuma sırasında hata olduysa) bekleyip
+                # zombi kalmasını engelle; Popen başarısızsa beklenecek süreç yok.
+                if proc is not None:
+                    try:
+                        proc.wait(timeout=5)
+                    except Exception:
+                        pass
                 exit_code = -1
 
             if exit_code == 0 and os.path.exists(out_path):
@@ -320,8 +328,11 @@ class RamWorker(QThread):
             params = build_winpmem_elevate_params(args, log_path)
             result = ctypes.windll.shell32.ShellExecuteW(None, "runas", "cmd.exe", params, None, 0)
             if result <= 32:
-                self.log.emit(f"Yükseltme başarısız (kod {result}) -- UAC reddedildi olabilir.")
+                msg = f"Yükseltme başarısız (kod {result}) -- UAC reddedildi olabilir."
+                self.log.emit(msg)
                 self.status.emit("Başlatılamadı / UAC reddedildi.", ui.ERROR)
+                if coc:
+                    coc.log_event(coc.EVENT_EXAM_ERROR, msg)
                 return
         except Exception as exc:
             self.log.emit(f"Başlatılamadı: {exc}")
@@ -353,10 +364,12 @@ class RamWorker(QThread):
         last_size = 0
         waited = 0
         tam_log = ""
+        has_log = False  # log_path hiç oluşmadı mı?
         while waited < 3600:  # full RAM uzun surebilir, 1 saate kadar bekle
             time.sleep(1)
             waited += 1
             if os.path.exists(log_path):
+                has_log = True
                 try:
                     with open(log_path, "r", encoding="utf-8", errors="replace") as f:
                         f.seek(last_size)
@@ -368,6 +381,12 @@ class RamWorker(QThread):
                 except OSError:
                     pass
             if winpmem_log_finished(tam_log):
+                break
+            # log_path hiç oluşmadı ve 30 sn geçti -- ShellExecute başarısız (UAC reddedildi vb.)
+            if waited >= 30 and not has_log:
+                self.status.emit("Log dosyası oluşmadı, yükseltme başarısız olabilir.", ui.ERROR)
+                if coc:
+                    coc.log_event(coc.EVENT_EXAM_ERROR, f"RAM full imaj (WinPmem) log dosyası oluşmadı: {log_path}")
                 break
 
         basarili = winpmem_log_succeeded(tam_log) and os.path.exists(out_path)

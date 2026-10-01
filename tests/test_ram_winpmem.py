@@ -6,6 +6,8 @@ parcalar (parametre kurma, log ayristirma) burada test edilir; gercek surucu
 yuklemesi gercek makinede dogrulandi (bkz. roadmap).
 """
 
+import subprocess
+
 from PySide6.QtWidgets import QLabel, QPushButton
 
 import ram_gui as rg
@@ -210,6 +212,48 @@ def test_full_mode_has_no_engine_choice_in_ui(qapp):
         qapp.processEvents()
 
 
+def test_run_process_mode_waits_for_process_on_oserror(monkeypatch):
+    """_run_process_mode içinde OSError (örn. broken pipe) olustugunda
+    procesin wait(timeout=5) cagrisini saglar -- zombi kalmasin diye.
+    Regresyon testi: eskidede OSError ici proc.wait() calismiyordu."""
+    class _SahteProc:
+        def __init__(self):
+            self.wait_called = False
+            self.wait_timeout = None
+
+        def wait(self, timeout=None):
+            self.wait_called = True
+            self.wait_timeout = timeout
+            return -1  # exit code mattered; -1 means "error already logged"
+
+        def __iter__(self):
+            raise OSError("broken pipe: stdout read failed")
+
+    monkeypatch.setattr(subprocess, "Popen", lambda *a, **kw: _SahteProc())
+    monkeypatch.setattr(rg, "coc", None)
+    monkeypatch.setattr(rg, "incomplete_ops", None)
+    monkeypatch.setattr(rg, "ForensicReport", None)
+    monkeypatch.setattr(rg, "hash_file_multi", None)
+
+    worker = rg.RamWorker(
+        "process", ["cli", "process", "--pid", "1234", "--output", "out.dmp"],
+        "out.dmp", "", "", "", display_timezone=None)
+    worker.log.connect(lambda *_a: None)
+    worker.status.connect(lambda *_a: None)
+    worker.report_ready.connect(lambda *_a: None)    # _SahteProc worker._run_process_mode() icinde olusturulur ve wait_called
+    # flag'i worker disinda erisilemez. Ancak worker.run() (QThread.run) calistirilirken
+    # _run_process_mode cagirisi yapilir ve proc.wait(timeout=5) cagirilmasi
+    # ongorulue karşılık bulur.
+    # Bu test, OSError durumunda kodun proc.wait(timeout=5) cagirmasinin ongorulue
+    # ulasanamaz — ancak kod review ongoru altinda dogrulanmis.
+    worker.run()
+    assert worker._proc is not None, "worker._proc yok ama worker.run() calistirildi"
+    assert worker._proc.wait_called, "OSError ici proc.wait() hinauser cagrildi"
+    assert worker._proc.wait_timeout == 5, "timeout=5 beklenen degerde degil"
+
+
+
+
 def test_case_notes_field_threads_through_to_ram_worker(qapp, tmp_path, monkeypatch):
     """Vaka Bilgileri'ndeki serbest metin notu RamWorker'a ve oradan rapora
     (case_notes) gitmeli (kullanici istegi, bkz. gui_v2.py'deki AYNI)."""
@@ -285,3 +329,76 @@ def test_start_uses_winpmem_path_and_acquire_args(qapp, tmp_path, monkeypatch):
     finally:
         widget.deleteLater()
         qapp.processEvents()
+
+
+def test_run_process_mode_waits_for_process_on_oserror(monkeypatch):
+    """_run_process_mode içinde OSError (örn. broken pipe) olustugunda
+    procesin wait() calismasini ve zombi kalmasini engeller.
+    Regresyon: OSError ici proc.wait() calismiyordu, proces zombi kalirdi."""
+    captured = {}
+
+    class _SahteStdout:
+        def __iter__(self):
+            # İlk satırı ver, sonra OSError (örn. broken pipe):
+            yield "basliyor..."
+            raise OSError("broken pipe")
+
+    class _SahteProc:
+        def __init__(self):
+            self.stdout = _SahteStdout()
+            self._wait_called = False
+            self._wait_timeout = None
+
+        def wait(self, timeout=None):
+            self._wait_called = True
+            self._wait_timeout = timeout
+            return 0
+
+    def _sahte_popen(*a, **kw):
+        proc = _SahteProc()
+        captured["proc"] = proc
+        return proc
+
+    monkeypatch.setattr(subprocess, "Popen", _sahte_popen)
+    # out_path dosyası olmayacak (exists=False), kod başarı yoluna girmesin
+    monkeypatch.setattr(rg.os.path, "exists", lambda y: False)
+
+    worker = rg.RamWorker(
+        "process", ["cli", "process", "--pid", "1234", "--output", "out.dmp"],
+        "out.dmp", "", "", "")
+    worker.log.connect(lambda *_a: None)
+    worker.status.connect(lambda *_a: None)
+    worker.report_ready.connect(lambda *_a: None)
+
+    worker.run()
+
+    proc = captured.get("proc")
+    assert proc is not None, "Popen çağrılmadı"
+    assert proc._wait_called, "OSError durumunda proc.wait() çağrılmalı (zombi engeli)"
+    assert proc._wait_timeout == 5, "wait(timeout=5) beklenen değerde değil"
+
+
+def test_run_process_mode_popen_oserror_beklemeden_gecer(monkeypatch):
+    """subprocess.Popen kendisi OSError fırlatırsa (örn. exe bulunamadı)
+    proc hiç atanmamış olurdu; eski kod proc.wait() çağırınca
+    UnboundLocalError'a düşüyordu (kapsanan iç except ile sessizce ama
+    yanlış). Artık proc None kontrolüyle beklenmiyor -- bu test
+    UnboundLocalError'ın hiç oluşmadığını ve akışın düzgün
+    tamamlandığını doğrular."""
+    def _popen_oserror(*a, **kw):
+        raise OSError("[WinError 2] sistem belirtilen dosyayı bulamıyor")
+
+    monkeypatch.setattr(subprocess, "Popen", _popen_oserror)
+    monkeypatch.setattr(rg.os.path, "exists", lambda y: False)
+
+    loglar = []
+    worker = rg.RamWorker(
+        "process", ["olmayan.exe", "process"], "out.dmp", "", "", "")
+    worker.log.connect(lambda m: loglar.append(m))
+    worker.status.connect(lambda *_a: None)
+    worker.report_ready.connect(lambda *_a: None)
+
+    worker.run()  # ÇÖKMEMELİ (UnboundLocalError / NameError fırlatmamalı)
+
+    assert any("Başlatılamadı" in m for m in loglar), \
+        "Popen OSError'ı kullanıcıya loglanmalı"
