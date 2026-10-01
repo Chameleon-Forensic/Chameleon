@@ -10,6 +10,7 @@
 1. `src/engines/ram_engine/ram_gui.py` — RAM motoru GUI'si + WinPmem çağırma mantığı
 2. `src/shared/incomplete_ops.py` — "Yarım Kalanlar" JSON kayıt defteri
 3. `src/engines/ssh_engine/local_collector/gui_v2.py` — worker thread sınıfları (ConnectWorker / AcquisitionWorker / VerifyWorker) ve sinyal/slot bağlantıları
+4. `src/launcher/chameleon_gui.py` — ana launcher (shell yeniden kurulumu, korunan sayfa yaşam döngüsü, PDF/CSV dışa aktarma)
 
 ---
 
@@ -170,6 +171,64 @@
 
 ---
 
+## 4. `chameleon_gui.py` — ana launcher
+
+### Bulgu 4.1 — Tema/dil değişimi, korunmuş araç ekranını imha ediyordu (use-after-free)
+
+- **Sorun:** `_build_shell()`, `setCentralWidget()` ile ESKİ central
+  widget'ı (ve tüm çocuklarını) SİLER. Kullanıcı araç ekranında çalışan
+  bir iş bırakıp (`_active_tool_widget`) ya da Bilgi Merkezi'ndeki
+  "Geri dönüş" sayfasını (`_return_page`) AYARLAR'a gidip tema/dil
+  değiştirdiğinde, bu fonksiyon o sayfaları da siler ama referanslar
+  silinmiş Qt nesnelerine dönerdi — sonraki `_resume_active_tool()` /
+  `_return_from_help()` çağrısı PySide6 `RuntimeError` ("Internal C++
+  object already deleted") ile uygulamayı çökertiyordu.
+- **Düzeltme:** `_build_shell()` yıkımdan ÖNCE yeni `_drop_preserved_pages()`
+  yardımcısını çağırıyor — referansları (ve `_active_tool_kind/_method`,
+  `_return_nav` metadata'sını) sıfırlıyor; Qt'nin widget'ı kendisinin
+  silmesine izin veriyor, çift-silme yapılmıyor.
+- **Regresyon:** `tests/test_launcher_theme_lang_state.py` (3 test) —
+  tema değişimi sonrası `_active_tool_widget is None` + resume çökmez;
+  dil değişimi sonrası `_return_page is None` + return çökmez; korunan
+  sayfa yokken davranış değişmez.
+
+### Bulgu 4.2 — RAM "Yeniden Başlat" prefill'i `case_notes`'u kaybediyordu
+
+- **Sorun:** `_show_incomplete_operations` RAM kartındaki case_prefill
+  dict'i case_id/examiner/custodian/organization taşıyordu ama
+  case_notes'u KESİNLİKLE unutuyordu — `incomplete_ops.record_start`
+  details'a koysa bile kaybolacaktı (diğer alanlarla tutarsız).
+- **Düzeltme:** Prefill dict'ine `case_notes` eklendi.
+- **Regresyon:** `test_ram_engine_prefill_carries_case_notes`.
+
+### Bulgu 4.3 — PDF dışa aktarmada çıplak import çökmesi
+
+- **Sorun:** `_export_report_pdf` içinde çıplak `import forensic_report`
+  vardı — modül herhangi bir sebeple yüklenemezse (bozuk kurulum/
+  paketleme hata mesajı vb.) buton tıklaması uygulamayı CRASH ederdi;
+  `_show_case_history` aynı durumda düzgün bir hata mesajı gösteriyordu.
+- **Düzeltme:** ImportError yakalanıp `_history_status` etiketine
+  `case_history_load_error` mesajı yazılıyor (aynı desen zaten
+  `_show_case_history`'de ve `_recent_case_card`'da vardı).
+- **Regresyon:** `test_export_report_pdf_survives_forensic_report_import_error`
+  (builtins.__import__ mock'lanarak ImportError simüle edilir).
+
+### Değerlendirilip DOKUNULMAYAN bulgular (bilinçli karar)
+
+- `_show_incomplete_operations` içindeki `try/except ImportError: pass`
+  blokları, modül yüklenemezse SSH/RAM kaynaklarını sessizce atlıyor —
+  bu bilinçli bir sadelik; sayfanın TAMAMI boş görünüyor ("kaynak yok"
+  ile aynı), hata mesajı eklemek launcher'ın dağıtım kesitine (target_kit
+  modu) bağımlı ekstra UI gerektirecekti, dokunulmadı.
+- 6 dilin TAMAMI test edildi (strings.py'de eksik çeviri anahtarı yok —
+  doğrulandı), `_apply_lang` dönüşümü doğru çalışıyor.
+
+**Sonuç:** `tests/test_launcher_theme_lang_state.py` 3/3 +
+`tests/test_launcher_case_prefill_pdf.py` 2/2 geçti; tüm suite 269 geçti
+(baseline 2 ilgisiz Windows-symlink-yetkisi fail'i dışında).
+
+---
+
 ## Değiştirilen Dosyalar
 
 | Dosya | Değişiklik |
@@ -180,6 +239,9 @@
 | `tests/test_incomplete_ops.py` | Yeni: 13 regresyon testi |
 | `src/engines/ssh_engine/local_collector/gui_v2.py` | Windows kolu segments NameError + eksik segment akışı |
 | `tests/test_gui_v2_windows_segments.py` | Yeni: 3 regresyon testi |
+| `src/launcher/chameleon_gui.py` | Tema/dil değişiminde use-after-free + 2 küçük düzeltme |
+| `tests/test_launcher_theme_lang_state.py` | Yeni: 3 regresyon testi |
+| `tests/test_launcher_case_prefill_pdf.py` | Yeni: 2 regresyon testi |
 | `docs/roadmap.md` | "Yapıldı" listesine review maddeleri |
 | `docs/code_review_bulgulari.md` | Bu rapor (yeni) |
 
