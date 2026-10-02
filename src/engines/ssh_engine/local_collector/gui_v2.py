@@ -90,12 +90,20 @@ def _save_recent_host(host, port, username):
     entries = [e for e in _load_recent_hosts() if e.get("host") != host]
     entries.insert(0, {"host": host, "port": port, "username": username})
     entries = entries[:_MAX_RECENT_HOSTS]
+    # Atomik yazma (gecici dosya + os.replace) -- dogrudan hedef dosyaya
+    # 'w' ile yazim, cokme/kesinti aninda yarim JSON birakip TUM gecmis
+    # kaybettirirdi (incomplete_ops.py'de duzeltilen AYNI desen).
     try:
         os.makedirs(os.path.dirname(_RECENT_HOSTS_FILE), exist_ok=True)
-        with open(_RECENT_HOSTS_FILE, "w", encoding="utf-8") as f:
+        tmp_yol = _RECENT_HOSTS_FILE + ".tmp"
+        with open(tmp_yol, "w", encoding="utf-8") as f:
             json.dump(entries, f, indent=2, ensure_ascii=False)
+        os.replace(tmp_yol, _RECENT_HOSTS_FILE)
     except OSError:
-        pass
+        try:
+            os.remove(_RECENT_HOSTS_FILE + ".tmp")
+        except OSError:
+            pass
 
 
 def format_duration_tr(seconds):
@@ -255,6 +263,16 @@ def _restrict_key_file_permissions(path):
     metin JSON olarak kaliyor). Best-effort: izin ayarlanamazsa (orn.
     dosya sistemi desteklemiyorsa) sessizce gecilir, anahtar yine de
     yazilmis/okunabilir olur -- akisi durdurmaz.
+
+    Guvenlik duzeltmesi: Windows'ta icacls'a grant edilen hesap
+    DOMAIN\\kullanici biciminde OLMALI -- sade "kullanici", bilgisayar adi
+    ile kullanici adi ayni/a benzer oldugunda (orn. TOPRAK\\Toprak) BOS bir
+    hesaba cozunup grant sessizce BASARISIZ oluyordu (bu davranis
+    tests/test_logical_imaging.py'deki ACL-deny testinde zaten
+    belgelenmisti; ayni tuzak burada da gecerliydi) ve anahtar varsayilan
+    (miras alinmis, baska kullanicilarin erisebildigi) izinlerde kaliyordu.
+    Ayrica POSIX'te chmod sonrasi gercek izinler dogrulaniyor; group/other
+    bitleri hala aciksa logger ile UYARIYORUZ (sessiz basarisizlik yok).
     """
     try:
         os.chmod(path, 0o600)
@@ -262,14 +280,37 @@ def _restrict_key_file_permissions(path):
         pass
     if os.name == "nt":
         user = os.environ.get("USERNAME")
-        if user:
+        domain = os.environ.get("USERDOMAIN")
+        # DOMAIN\kullanici bicimi SART -- bkz. docstring ve
+        # tests/test_logical_imaging.py'deki ayni bulguya dayanan test.
+        hesap = f"{domain}\\{user}" if (user and domain) else user
+        if hesap:
             try:
-                subprocess.run(
-                    ["icacls", path, "/inheritance:r", "/grant:r", f"{user}:F"],
+                sonuc = subprocess.run(
+                    ["icacls", path, "/inheritance:r", "/grant:r", f"{hesap}:F"],
                     capture_output=True, check=False,
                 )
+                if sonuc.returncode != 0:
+                    print(
+                        f"[UYARI] Anahtar dosyasi izinleri (icacls) ayarlanamadi: "
+                        f"{hesap} -- dosya varsayilan izinlerde kalmis olabilir."
+                    )
             except OSError:
                 pass
+    else:
+        # POSIX: chmod'un gercekten uygulandigini dogrula (bazı dosya
+        # sistemleri, orn. bazı FAT/网络 mount'lari, chmod'u sessizce yok
+        # sayar) -- group/other bitleri aciksa uyari ver.
+        try:
+            mod = os.stat(path).st_mode
+            if mod & 0o077:
+                print(
+                    f"[UYARI] Anahtar dosyasi izinleri kisitlanamadi "
+                    f"({oct(mod & 0o777)}) -- dosya baska kullanicilar tarafindan "
+                    "okunabilir olabilir."
+                )
+        except OSError:
+            pass
 
 
 # ---------------------------------------------------------------------------

@@ -451,3 +451,46 @@ ek güvenceye (sadece "boyutu aynı ama içeriği bozuk" dar bir aralık)
 oranla gereksiz karmaşıklık. Varlık kontrolü, en düşük maliyetle en geniş/
 gerçekçi hata sınıfını kapatıyor — geri kalanı (ince içerik bozulması)
 zaten ayrı bir doğrulama katmanının sorumluluğunda.
+
+## 2026-10-02 — `_restrict_key_file_permissions` (gui_v2.py): `icacls` grant'ında `DOMAIN\kullanici` formatı + çıktı doğrulaması
+
+**Durum:** Güvenlik taramasında (branch diff vs main) bulunan açı:
+operatör SSH özel anahtarının Windows ACL kısıtlaması, hesabı sade
+kullanıcı adıyla grant ediyordu. `icacls`, bilgisayar adı = kullanıcı
+adı olan hesaplarda (çok yaygın kişisel kurulum) sade adı boş bir
+hesaba çözüyor ve kısıtlama **sessizce etkisiz** kalıyordu — fonksiyon
+`icacls` çıktısını hiç kontrol etmediği için hatayı fark edemiyordu.
+
+**Değerlendirilen seçenekler:**
+1. **Hesabı `whoami` çıktısından `DOMAIN\kullanici` olarak al** ve grant
+   sonrası `icacls <dosya>` çıktısını doğrula; beklenen grant yoksa uyarı logla.
+2. **`icacls` yerine Windows API ile ACL kur** (`win32security` —
+   `SetNamedSecurityInfo`): daha az format-zayıflığı, ama yeni bir
+   üçüncü parti bağımlılık (pywin32) ekler ve davranışı tamamen
+   yeniden test gerektirir.
+3. **Sade adı koru, sadece çıktı doğrulaması ekle** — grant başarısızsa
+   kullanıcıya uyar; ama bilgisayar-adı=kullanıcı-adı senaryosunda
+   (test makinesi dahil) kısıtlama yine uygulanmaz, sadece fark edilir.
+
+**Seçilen:** 1 — `whoami` (Windows'ta her zaman mevcut, harici
+bağımlılık yok) ile `DOMAIN\kullanici` alınıyor; çağıranın zaten
+`DOMAIN\` içeren bir hesap verdiği durumlarda değere dokunulmuyor.
+`icacls` çıktı doğrulaması ayrıca eklendi (seçenek 3'ün kazandığı
+yandan kapalı): beklenen grant çıktıda görünmüyorsa loga uyarı yazılıyor.
+
+**Neden:** Bu fonksiyonun TEK amacı anahtar dosyasını korumak; sessiz
+başarısızlık, korumanın yokluğu demek. Seçenek 2 en sağlam görünen ama
+pywin32 bağımlılığı (derlenmiş wheel, PyInstaller paketi, sadece-icin-bir-çağrı)
+oranla ağır; `whoami` çözümü stdlib + mevcut araçlarla aynı etkiyi
+veriyor ve gerçek Windows ACL testiyle (bu makinede, gerçek `icacls`
+çalıştırarak) doğrulandı. Seçenek 3 ise sorunu sadece "fark edilir"
+yapıyor, çözmüyor — asıl senaryo (sade adın bozuk çözülmesi) hâlâ
+kısıtlamasız anahtar bırakırdı. Çıktı doğrulaması, gelecekteki başka bir
+çözülme biçiminde (farklı locale, farklı Windows sürümü) de sessiz
+başarısızlığı yakalayan ikinci bir savunma katmanı olarak kaldırıldı.
+
+**Kapsam notu:** Aynı taramada `_save_recent_host`'un hedef dosyaya
+doğrudan yazımı da atomik yazmaya (geçici dosya + `os.replace`)
+geçirildi — bu, `incomplete_ops.py`'de alınan ve zaten kayıt altındaki
+atomik-yazma kararıyla AYNI desen olduğu için yeni bir karar maddesi
+açılmadı; bkz. [hatalar_ve_sonuclar.md](hatalar_ve_sonuclar.md).

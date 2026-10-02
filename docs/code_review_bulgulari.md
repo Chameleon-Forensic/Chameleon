@@ -229,6 +229,21 @@
 
 ---
 
+## 5. Güvenlik taraması — branch'in `main`e karşı tüm diff'i (OWASP-tarzı)
+
+Tarama kapsamı: komut enjeksiyonu, path traversal, yetersiz input validasyonu, kimlik bilgisi sızıntısı, TOCTOU, güvensiz geçici dosya kullanımı. `git diff origin/main...HEAD` üzerinden TÜM eklenen/degışen satırlar (`.py` + `.spec` + bat/ps1) tarandı.
+
+**Temiz bulunanlar (mevcut savunmalar teyit edildi):**
+- Linux komutlarında `shlex.quote()`, PowerShell komutlarında `powershell_quote()` + `-LiteralPath`, `disk_number`/`port` gibi sayısal girdilerde `int()` zorlaması — her yerde yerinde.
+- Tor kontrol-protokolü enjeksiyon koruması (`is_valid_key_b32`) hem istemci (`tor_client`) hem sunucu (`tor_manager`) tarafında, Tor'a gitmeden önce çağrılıyor.
+- Log/custodian alanlarında sanitize; HTML raporda kaçırma.
+- Preview/known_hosts path traversal guard'ları (symlink testleri dahil).
+- Kimlik bilgisi sızıntısı: parola/anahtar içeriği hiçbir loga/rapora yazılmıyor; sadece fingerprint (SHA256) loglanıyor.
+
+**Bulunan 2 gerçek açık ve düzeltmeleri:**
+1. **[GÜVENLİK] `_restrict_key_file_permissions` (gui_v2.py): `icacls` grant'ı sade kullanıcı adında sessizce etkisiz** — Windows'ta bilgisayar adı = kullanıcı adı olan hesaplarda (test makinesi: `TOPRAK\Toprak`) sade ad boş hesaba çözülüyor, operatör SSH anahtarının ACL kısıtlaması uygulanmıyordu. Proje kendi `test_logical_imaging.py`'sinde bu davranışı belgeliyordu ama fonksiyon sade ad göndermeye devam ediyordu. **Düzeltme:** hesap `whoami` çıktısından `DOMAIN\kullanici` olarak alınıyor (zaten `DOMAIN\` içeren değer korunur) + `icacls` çıktısı doğrulanıp beklenen grant yoksa uyarı loglanıyor. Karar gerekçesi: [kararlar.md](kararlar.md) (2026-10-02 maddesi). Kanıt: `tests/test_security_hardening.py` — mock testler + **gerçek Windows ACL testi** (gerçek `icacls` çalıştırıp ACL okuyarak, bu makinede geçti).
+2. **[ATOMİKLİK/TOCTOU] `_save_recent_host` (gui_v2.py): "Son Bağlantılar" dosyasına doğrudan `open("w")` yazımı** — çökme/kesintide yarım JSON bırakıp tüm geçmişi kaybettiriyordu (`incomplete_ops.py`'de düzeltilen aynı hata sınıfı). **Düzeltme:** geçici dosya + `os.replace()` atomik yazma; başarısızlıkta mevcut dosya bozulmadan kalıyor. Kanıt: `tests/test_security_hardening.py` — 2 regresyon testi (`.tmp` kalmıyor; başarısız yazımda eski içerik korunuyor).
+
 ## Değiştirilen Dosyalar
 
 | Dosya | Değişiklik |
@@ -242,6 +257,10 @@
 | `src/launcher/chameleon_gui.py` | Tema/dil değişiminde use-after-free + 2 küçük düzeltme |
 | `tests/test_launcher_theme_lang_state.py` | Yeni: 3 regresyon testi |
 | `tests/test_launcher_case_prefill_pdf.py` | Yeni: 2 regresyon testi |
+| `src/engines/ssh_engine/local_collector/gui_v2.py` (güvenlik) | icacls `DOMAIN\kullanici` düzeltmesi + çıktı doğrulaması + `_save_recent_host` atomik yazma |
+| `tests/test_security_hardening.py` | Yeni: 5 güvenlik regresyon testi (gerçek Windows ACL dahil) |
+| `docs/kararlar.md` | icacls hesap-formatı karar gerekçesi |
+| `docs/hatalar_ve_sonuclar.md` | 2 güvenlik bulgusu eklendi |
 | `docs/roadmap.md` | "Yapıldı" listesine review maddeleri |
 | `docs/code_review_bulgulari.md` | Bu rapor (yeni) |
 
