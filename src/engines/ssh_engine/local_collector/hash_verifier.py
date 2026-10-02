@@ -170,6 +170,7 @@ class VerificationReport:
     mismatched: list = field(default_factory=list)
     missing: list = field(default_factory=list)
     unexpected: list = field(default_factory=list)
+    malformed: list = field(default_factory=list)
     master: Optional[HashResult] = None
     expected_master: Optional[str] = None
     duration_seconds: float = 0.0
@@ -188,6 +189,7 @@ class VerificationReport:
             not self.mismatched
             and not self.missing
             and not self.unexpected
+            and not self.malformed
             and self.master_ok is not False
         )
 
@@ -204,6 +206,7 @@ class VerificationReport:
             "mismatched": self.mismatched,
             "missing": self.missing,
             "unexpected": self.unexpected,
+            "malformed": self.malformed,
             "master_hash": self.master.to_dict() if self.master else None,
             "expected_master_hash": self.expected_master,
             "master_hash_ok": self.master_ok,
@@ -431,31 +434,9 @@ def hash_file_multi(
     Raises:
         FileNotFoundError: dosya yoksa.
     """
-    path = Path(path)
-    if not path.is_file():
-        raise FileNotFoundError(f"Dosya bulunamadi: {path}")
-
-    total = path.stat().st_size
-    hashers = {}
-    for alg in algorithms:
-        try:
-            hashers[alg] = hashlib.new(alg)
-        except ValueError:
-            pass
-
-    processed = 0
-    with path.open("rb") as handle:
-        while True:
-            block = handle.read(buffer_size)
-            if not block:
-                break
-            for hasher in hashers.values():
-                hasher.update(block)
-            processed += len(block)
-            if progress is not None:
-                progress(processed, total)
-
-    return {alg: hasher.hexdigest() for alg, hasher in hashers.items()}
+    return hash_files_multi(
+        [path], algorithms=algorithms, progress=progress, buffer_size=buffer_size
+    )
 
 
 def hash_files_multi(
@@ -480,11 +461,14 @@ def hash_files_multi(
         FileNotFoundError: paths'teki herhangi bir dosya yoksa.
     """
     resolved = [Path(p) for p in paths]
+    sizes = []
     for p in resolved:
-        if not p.is_file():
+        try:
+            sizes.append(p.stat().st_size)
+        except FileNotFoundError:
             raise FileNotFoundError(f"Dosya bulunamadi: {p}")
 
-    total = sum(p.stat().st_size for p in resolved)
+    total = sum(sizes)
     hashers = {}
     for alg in algorithms:
         try:
@@ -652,10 +636,21 @@ def verify_image_against_manifest(
     )
 
     # Manifest JSON'dan geldiginde anahtarlar metin olabilir; int'e cevrilir.
-    normalized_expected = {
-        int(idx): normalize_digest(value, algorithm=algorithm)
-        for idx, value in expected_chunks.items()
-    }
+    # Yarim kalan/kesintiye ugramis bir yazma nedeniyle bozulmus bir manifest
+    # girdisi (gecersiz indeks ya da gecersiz ozet) bu fonksiyonun "asla hata
+    # FIRLATMAZ, eksiksiz rapor uretir" sozlesmesini bozmamali -- boyle bir
+    # girdi normalized_expected'e hic girmez (o indeksteki gercek blok, hicbir
+    # beklenen ozetle eslesmeyecegi icin dogal olarak "unexpected" olarak
+    # raporlanir), ayrica report.malformed'a kendi basina kaydedilir.
+    normalized_expected = {}
+    for idx, value in expected_chunks.items():
+        try:
+            normalized_idx = int(idx)
+            normalized_digest = normalize_digest(value, algorithm=algorithm)
+        except (ValueError, InvalidDigestError) as exc:
+            report.malformed.append({"raw_index": idx, "raw_value": value, "error": str(exc)})
+            continue
+        normalized_expected[normalized_idx] = normalized_digest
 
     master = hashlib.new(algorithm)
     processed = 0

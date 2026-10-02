@@ -139,6 +139,14 @@ class ForensicReport:
         yerler guncellenmedigi icin, orn. eski/ozel bir cagri) asagidaki
         FALLBACK ile eskisi gibi dosyadan hesaplanir -- davranis hicbir
         cagiran icin BOZULMAZ, sadece guncellenenler icin hizlanir.
+
+        md5_hash ve sha1_hash BIRBIRINDEN BAGIMSIZ ele alinir: cagiran
+        sadece birini verip digerini vermezse (orn. sadece md5_hash),
+        verilMEYEN alan sessizce bos KALMAZ -- kendi basina fallback'te
+        dosyadan hesaplanir. (Eskiden ikisinden biri verildiginde fallback
+        bloguna hic girilmiyordu, verilmeyen alan kalici None kaliyordu --
+        bu gercek bir mantik hatasiydi, simdiki tum caginlar ikisini birlikte
+        verdigi icin sessizce uykudaydi.)
         """
         self.end_time_utc = _now_iso()
         self.status = status
@@ -149,27 +157,34 @@ class ForensicReport:
         self.chunk_count = chunk_count
         self.failed_items = failed_items or []
 
-        if md5_hash is not None or sha1_hash is not None:
-            self.md5_hash = md5_hash
-            self.sha1_hash = sha1_hash
+        self.md5_hash = md5_hash
+        self.sha1_hash = sha1_hash
+
+        if md5_hash is not None and sha1_hash is not None:
             return
 
-        # FALLBACK: cagiran md5_hash/sha1_hash gecirmedi -- eski davranis
-        # (dosyayi burada, IKINCI KEZ, bastan sona okuyarak hesapla).
-        # Birincil butunluk degeri SHA-256 (image_hash) olarak kalir --
-        # chunk dogrulama/resume/verify_report.py hep onu kullanir. Dosya
-        # yoksa/okunamiyorsa (ornegin basarisiz islem, ya da klasor
-        # modunda tek bir "output_path" olmamasi) sessizce None birakilir.
+        # FALLBACK: cagiran md5_hash ve/veya sha1_hash'i gecirmedi -- eski
+        # davranis (dosyayi burada, IKINCI KEZ, bastan sona okuyarak
+        # hesapla). Sadece VERILMEYEN alan(lar) bu hesaplamayla doldurulur --
+        # cagiranin zaten verdigi deger ASLA ezilmez. Birincil butunluk
+        # degeri SHA-256 (image_hash) olarak kalir -- chunk dogrulama/
+        # resume/verify_report.py hep onu kullanir. Dosya yoksa/okunamiyorsa
+        # (ornegin basarisiz islem, ya da klasor modunda tek bir
+        # "output_path" olmamasi) sessizce None birakilir.
         if output_path and os.path.isfile(output_path):
             try:
-                md5 = hashlib.md5()
-                sha1 = hashlib.sha1()
+                md5 = hashlib.md5() if md5_hash is None else None
+                sha1 = hashlib.sha1() if sha1_hash is None else None
                 with open(output_path, "rb") as f:
                     for block in iter(lambda: f.read(4 * 1024 * 1024), b""):
-                        md5.update(block)
-                        sha1.update(block)
-                self.md5_hash = md5.hexdigest()
-                self.sha1_hash = sha1.hexdigest()
+                        if md5 is not None:
+                            md5.update(block)
+                        if sha1 is not None:
+                            sha1.update(block)
+                if md5 is not None:
+                    self.md5_hash = md5.hexdigest()
+                if sha1 is not None:
+                    self.sha1_hash = sha1.hexdigest()
             except OSError:
                 pass
             except ValueError:
@@ -196,11 +211,12 @@ class ForensicReport:
 
     def to_dict(self):
         coc_log_path = coc.get_log_file_path()
-        events = coc.read_events(
+        coc_result = coc.read_events_with_status(
             log_file_path=coc_log_path,
             start_time_utc=self.start_time_utc,
             end_time_utc=self.end_time_utc,
         )
+        events = coc_result["events"]
         return {
             "report_version": "1.0",
             "tool": {"name": TOOL_NAME, "version": TOOL_VERSION, "engine": self.engine, "method": self.method},
@@ -244,18 +260,30 @@ class ForensicReport:
             },
             "chain_of_custody": {
                 "log_file": coc_log_path,
+                # Bos bir "events" listesinin "hic olay olmadi" mi yoksa
+                # "log dosyasina ulasilamadi" (silinmis/USB cikarilmis/
+                # okuma hatasi) mi oldugunu incelemecinin raporun
+                # KENDISINDEN ayirt edebilmesi icin (bkz.
+                # chain_of_custody.read_events_with_status()).
+                "log_dosyasi_bulundu": coc_result["log_file_found"],
                 "events": events,
             },
         }
 
-    def to_html(self):
+    def to_html(self, precomputed_dict=None):
         """
         Rapor.json'daki AYNI bilgiyi, ekranda gosterilebilir/yazdirilabilir/
         paylasilabilir tek bir HTML dosyasi olarak uretir -- delil zinciri
         olay listesi dahil. Harici bir kutuphane gerekmez (PDF degil, ama
         tarayicidan "Yazdir -> PDF olarak kaydet" ile PDF'e cevrilebilir).
+
+        precomputed_dict: cagiran (save()) to_dict()'i ZATEN hesapladiysa
+        (chain_of_custody log dosyasini okuyup ayristirmak dahil), burada
+        TEKRAR hesaplanmasin diye dogrudan verilebilir -- opsiyonel,
+        verilmezse (parametresiz cagrilan mevcut kullanim) eskisi gibi
+        to_dict() burada hesaplanir.
         """
-        d = self.to_dict()
+        d = precomputed_dict if precomputed_dict is not None else self.to_dict()
 
         def esc(v):
             return html.escape("" if v is None else str(v))
@@ -268,6 +296,16 @@ class ForensicReport:
             for e in d["chain_of_custody"]["events"]
         )
         basarisiz = "".join(f"<li>{esc(x)}</li>" for x in d["result"]["failed_items"]) or "<li>—</li>"
+        # Bos bir olay listesinin "hic olay olmadi" ile "log dosyasina
+        # ulasilamadi" (silinmis/USB cikarilmis/okuma hatasi) arasindaki
+        # farki raporu okuyan insana da acikca gostermek icin -- bkz.
+        # chain_of_custody.read_events_with_status().
+        log_uyarisi = (
+            '<div style="color:#A64545; font-weight:600; margin-top:8px;">'
+            "⚠ Log dosyasına ulaşılamadı — aşağıdaki liste eksik olabilir, "
+            "bu \"hiç olay yok\" anlamına GELMEZ.</div>"
+            if not d["chain_of_custody"]["log_dosyasi_bulundu"] else ""
+        )
 
         return f"""<!DOCTYPE html>
 <html lang="tr"><head><meta charset="utf-8">
@@ -330,6 +368,7 @@ class ForensicReport:
   </div>
 
   <h2>Delil Zinciri (Chain of Custody)</h2>
+  {log_uyarisi}
   <table>
     <tr><th>Zaman (UTC)</th><th>Olay</th><th>Açıklama</th><th>Hash</th></tr>
     {satirlar}
@@ -342,13 +381,21 @@ class ForensicReport:
     def save(self, output_dir, filename="report.json"):
         os.makedirs(output_dir, exist_ok=True)
         path = os.path.join(output_dir, filename)
-        report_bytes = json.dumps(self.to_dict(), indent=2, ensure_ascii=False).encode("utf-8")
+        # to_dict() chain_of_custody log dosyasini BASTAN okuyup ayristirir
+        # (coc.read_events_with_status) -- uzun bir oturumda (orn. buyuk bir
+        # disk imajinda blok basina bir olay) bu pahali olabilir. save()
+        # hem JSON hem HTML icin AYNI veriye ihtiyac duydugundan burada BIR
+        # KEZ hesaplayip to_html()'e gecirerek log dosyasinin cift okunmasini
+        # (ve save()'in vaka basina birden fazla kez cagrilmasinda -- finish()
+        # sonrasi, set_verification() sonrasi -- gereksiz tekrar I/O'yu) onluyoruz.
+        d = self.to_dict()
+        report_bytes = json.dumps(d, indent=2, ensure_ascii=False).encode("utf-8")
         with open(path, "wb") as f:
             f.write(report_bytes)
 
         html_path = os.path.splitext(path)[0] + ".html"
         with open(html_path, "w", encoding="utf-8") as f:
-            f.write(self.to_html())
+            f.write(self.to_html(precomputed_dict=d))
 
         # report.json'un KENDISI sonradan degistirilirse (rapor uzerinde
         # oynama) bunu ayrica fark edebilmek icin -- rapor bir kere
@@ -463,10 +510,18 @@ def export_pdf(report_json_path, pdf_path):
     body = ParagraphStyle("body", parent=styles["BodyText"], fontName="Inter")
 
     def g(*keys):
+        # DIKKAT: donen deger dogrudan Paragraph()'a (ReportLab) veriliyor --
+        # ReportLab girdiyi pseudo-XML/HTML markup olarak AYRISTIRIYOR, bu
+        # yuzden serbest metin bir alan (orn. case_notes, bir yol/aciklama)
+        # dengesiz "<...>" iceriyorsa escape edilmeden verilince
+        # ValueError('paraparser: syntax error ...') ile export_pdf() COKUYOR
+        # (bkz. docs/hatalar_ve_sonuclar.md). to_html()'deki esc() ile AYNI
+        # mantik (html.escape) burada da uygulanir -- en azindan <, >, & (ve
+        # tirnaklar) kacirilir.
         cur = d
         for k in keys:
             cur = (cur or {}).get(k)
-        return "—" if cur in (None, "") else str(cur)
+        return "—" if cur in (None, "") else html.escape(str(cur))
 
     def kv_table(rows):
         data = [[Paragraph(f"<b>{label}</b>", body), Paragraph(value, body)] for label, value in rows]
@@ -520,7 +575,7 @@ def export_pdf(report_json_path, pdf_path):
         kv_table([
             ("Durum", g("result", "status")),
             ("Çıktı Yolu", g("result", "output_path")),
-            ("Başarısız Öğeler", ", ".join(d.get("result", {}).get("failed_items") or []) or "—"),
+            ("Başarısız Öğeler", html.escape(", ".join(d.get("result", {}).get("failed_items") or [])) or "—"),
             ("Doğrulama Yapıldı mı", g("verification", "verified")),
             ("Hash Eşleşmesi", g("verification", "hash_match")),
         ]),
@@ -528,15 +583,28 @@ def export_pdf(report_json_path, pdf_path):
         Paragraph("Delil Zinciri (Chain of Custody)", h2),
     ]
 
+    # Eski (bu alan eklenmeden ONCE kaydedilmis) report.json'larda bu
+    # anahtar hic olmayabilir -- .get(..., True) ile geriye donuk uyumlu:
+    # bilinmiyorsa uyari GOSTERME (yanlis pozitif vermemek icin).
+    if d.get("chain_of_custody", {}).get("log_dosyasi_bulundu", True) is False:
+        story.append(Paragraph(
+            '<font color="#A64545"><b>Log dosyasına ulaşılamadı — aşağıdaki liste '
+            'eksik olabilir, bu "hiç olay yok" anlamına GELMEZ.</b></font>', body,
+        ))
+
     events = d.get("chain_of_custody", {}).get("events") or []
     header_row = [Paragraph(f"<b>{h}</b>", body) for h in ("Zaman (UTC)", "Olay", "Açıklama", "Hash")]
     event_rows = [header_row]
     for e in events:
+        # DIKKAT: chain-of-custody olay alanlari (ozellikle "description",
+        # serbest metin) da g() gibi html.escape() ile kacirilmadan
+        # Paragraph()'a verilirse AYNI ReportLab paraparser cokmesine yol
+        # acar -- bkz. g()'nin ustundeki not.
         event_rows.append([
-            Paragraph(str(e.get("timestamp_utc") or ""), body),
-            Paragraph(str(e.get("event") or ""), body),
-            Paragraph(str(e.get("description") or ""), body),
-            Paragraph(str(e.get("hash") or ""), body),
+            Paragraph(html.escape(str(e.get("timestamp_utc") or "")), body),
+            Paragraph(html.escape(str(e.get("event") or "")), body),
+            Paragraph(html.escape(str(e.get("description") or "")), body),
+            Paragraph(html.escape(str(e.get("hash") or "")), body),
         ])
     events_tbl = Table(event_rows, colWidths=[32 * mm, 38 * mm, 70 * mm, 30 * mm], repeatRows=1)
     events_tbl.setStyle(TableStyle([

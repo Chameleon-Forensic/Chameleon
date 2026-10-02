@@ -7,6 +7,7 @@ kendisinden kurulur (bkz. disk_tree.py, test_disk_tree.py).
 
 import json
 import os
+import tempfile
 
 import pytest
 
@@ -195,6 +196,82 @@ def test_show_disk_tree_dialog_populates_tree_widget(qapp, fat12_image_path, mon
         assert kok.text(0) == t("tool_tree_whole_image", "tr")
         alt_isimler = {kok.child(i).text(0) for i in range(kok.childCount())}
         assert alt_isimler == {"HELLO.TXT", "SUBDIR"}
+    finally:
+        widget.deleteLater()
+        qapp.processEvents()
+
+
+@pytest.mark.parametrize("kotu_isim", [
+    "../../evil.txt",
+    "..\\..\\evil.txt",
+    "../../../etc/passwd",
+    "..",
+    "/etc/passwd",
+])
+def test_guvenli_onizleme_dosya_adi_strips_traversal_and_separators(kotu_isim):
+    """HATA 2 birim testi (path traversal, CWE-22): disk_tree.py'den gelen
+    (sanitize edilmemis) isim ne olursa olsun, onizleme dosya adinda '/'\
+    '\\' veya '..' KESINLIKLE bulunmamali -- ad inode'a dayanmali."""
+    guvenli = gui_v2._guvenli_onizleme_dosya_adi(42, kotu_isim)
+    assert "/" not in guvenli
+    assert "\\" not in guvenli
+    assert ".." not in guvenli
+    assert guvenli.startswith("inode42")
+
+
+def test_show_disk_tree_dialog_double_click_sanitizes_traversal_filename(qapp, tmp_path, monkeypatch):
+    """HATA 2 regresyon testi (path traversal, CWE-22): disk_tree.py ham
+    imajdan sanitize edilmemis bir dosya adi dondurse bile ('../../evil.txt'
+    gibi -- pytsk3 dizin girdisi adlarini OS dosya adi dogrulamasindan
+    GECIRMEDEN ham bayttan okuyor), cift tiklamada cikarilan dosyanin
+    GERCEK (realpath) yolu HER ZAMAN gecici klasorun ICINDE kalmali,
+    hicbir sekilde disina yazilmamali."""
+    kotu_isim = "../../../../evil.txt"
+    sahte_bolumler = [{
+        "description": None,
+        "offset": 0,
+        "tree": {kotu_isim: (7, 3)},
+        "error": None,
+    }]
+    monkeypatch.setattr(gui_v2.disk_tree, "open_disk_tree", lambda yol: sahte_bolumler)
+
+    yakalanan = {}
+
+    def _sahte_extract_file(image_path, offset, inode, dest_path):
+        yakalanan["dest_path"] = dest_path
+        with open(dest_path, "wb") as f:
+            f.write(b"zararsiz")
+
+    monkeypatch.setattr(gui_v2.disk_tree, "extract_file", _sahte_extract_file)
+    monkeypatch.setattr(gui_v2.os, "startfile", lambda yol: None, raising=False)
+
+    orijinal = gui_v2.QTreeWidget
+
+    class YakalayanTree(orijinal):
+        def __init__(self, *a, **kw):
+            super().__init__(*a, **kw)
+            yakalanan["tree"] = self
+
+    monkeypatch.setattr(gui_v2, "QTreeWidget", YakalayanTree)
+
+    sahte_imaj = tmp_path / "sahte.img"
+    sahte_imaj.write_bytes(b"\x00")
+
+    widget = gui_v2.ForensicWidget(lang="tr")
+    qapp.processEvents()
+    try:
+        widget._show_disk_tree_dialog(str(sahte_imaj))
+        tree = yakalanan["tree"]
+        kok = tree.topLevelItem(0)
+        dosya_oge = kok.child(0)
+        assert dosya_oge.text(0) == kotu_isim  # goruntulemede orijinal isim (bilerek) korunuyor
+
+        tree.itemDoubleClicked.emit(dosya_oge, 0)
+
+        assert "dest_path" in yakalanan
+        gecici_kok = os.path.realpath(tempfile.gettempdir())
+        gercek_hedef = os.path.realpath(yakalanan["dest_path"])
+        assert gercek_hedef == gecici_kok or gercek_hedef.startswith(gecici_kok + os.sep)
     finally:
         widget.deleteLater()
         qapp.processEvents()

@@ -32,8 +32,16 @@ def get_ssh_connection():
 
     host = input("SSH Host: ").strip()
 
-    port_input = input("SSH Port [22]: ").strip()
-    port = int(port_input) if port_input else 22
+    while True:
+        port_input = input("SSH Port [22]: ").strip()
+        if not port_input:
+            port = 22
+            break
+        try:
+            port = int(port_input)
+            break
+        except ValueError:
+            print("Sayisal bir port girin.")
 
     username = input("SSH Username: ").strip()
 
@@ -81,12 +89,36 @@ def select_target_os():
         print("Gecersiz secim.")
 
 
+def _parse_lsblk_names(disks_output):
+    """
+    ssh_connector.list_disks()'in ciktisi ("lsblk -o NAME,SIZE,TYPE,FSTYPE,
+    MOUNTPOINT,MODEL,SERIAL", agac gorunumu acik) satir satir ayrıstirilir,
+    sadece gercek NAME kolonu (ilk whitespace-ayrilmis token) alinir.
+    lsblk, alt bolumleri "├─sda1" / "└─sda1" gibi agac-cizim karakterleriyle
+    gosterdigi icin bu karakterler NAME'den temizlenir -- aksi halde SIZE/
+    MODEL/SERIAL kolonlarindaki rastgele bir alt string ya da bu cizim
+    karakterleri yuzunden gercek olmayan bir isim "bulundu" sanilabilir.
+    """
+    names = []
+    for line in (disks_output or "").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        token = line.split()[0]
+        name = token.lstrip("│├└─ \t")
+        if name and name != "NAME":
+            names.append(name)
+    return names
+
+
 def select_disk(disks_output):
     """
-    Kullanicidan hedef disk yolunu ister, lsblk ciktisinda gercekten var
-    olup olmadigini dogrular; bulunamazsa tekrar sorar. SADECE Linux hedef
-    icin -- Windows'ta disk numarasi dogrudan sorulur (select_windows_disk_number).
+    Kullanicidan hedef disk yolunu ister, lsblk ciktisindaki NAME kolonunda
+    gercekten var olup olmadigini dogrular; bulunamazsa tekrar sorar.
+    SADECE Linux hedef icin -- Windows'ta disk numarasi dogrudan sorulur
+    (select_windows_disk_number).
     """
+    gecerli_isimler = _parse_lsblk_names(disks_output)
     while True:
         raw = input("\nHedef disk (orn. /dev/sdb): ").strip()
         if not raw:
@@ -96,7 +128,7 @@ def select_disk(disks_output):
         disk_path = raw if raw.startswith("/dev/") else f"/dev/{raw}"
         disk_name = disk_path.replace("/dev/", "")
 
-        if disk_name and disk_name in disks_output:
+        if disk_name and disk_name in gecerli_isimler:
             return disk_path
 
         print(f"'{disk_name}' listede bulunamadi, tekrar deneyin.")

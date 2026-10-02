@@ -180,14 +180,60 @@ def test_linux_plain_folder_mode_still_writes_manifest_after_every_file(tmp_path
 
 
 def test_linux_logical_resume_skips_already_acquired(tmp_path):
+    """resume, yerel cikti dosyasi GERCEKTEN VARSA onceden alinmis dosyayi
+    atlamali (eski davranis) -- bkz. hemen altindaki test, dosya
+    YOKKEN artik atlanmadigini (bkz. docs/kararlar.md, fix #2) dogruluyor."""
     fs = FakeLinuxFS({"/d/a": b"1", "/d/b": b"2", "/d/c": b"3"})
+    out = tmp_path / "out"
+    out.mkdir()
+    # Gercekci resume: onceki calisma bu dosyalari GERCEKTEN diske yazmis --
+    # acquire_remote_tree'nin kendi hesapladigi yol (relpath(uzak, taban))
+    # ile AYNI konumda olmalari gerekiyor, aksi halde varlik kontrolu
+    # (fix #2) bunlari "kayip" sayip yeniden cekmeye calisir.
+    (out / "a").write_bytes(b"1")
+    (out / "b").write_bytes(b"2")
     state = {"acquired_files": ["/d/a", "/d/b"], "acquired_detail": [
-        {"remote_path": "/d/a", "local_path": "x", "sha256": "h"},
-        {"remote_path": "/d/b", "local_path": "y", "sha256": "h"},
+        {"remote_path": "/d/a", "local_path": str(out / "a"), "sha256": "h"},
+        {"remote_path": "/d/b", "local_path": str(out / "b"), "sha256": "h"},
     ]}
-    manifest = fa.acquire_logical_image(fs, "/d", str(tmp_path / "out"), resume_state=state)
+    manifest = fa.acquire_logical_image(fs, "/d", str(out), resume_state=state)
     assert set(fs.dd_calls) == {"/d/c"}, "sadece kalan dosya gercekten cekilmeli"
     assert len(manifest["acquired"]) == 3
+
+
+def test_linux_logical_resume_reacquires_file_whose_local_copy_went_missing(tmp_path):
+    """Hata #2 (bkz. docs/kararlar.md): resume_state onceki calismada "/d/a"
+    ve "/d/b"nin alindigini soylese bile, "/d/a"nin yerel kopyasi output_dir
+    altinda YOKSA (program coktu, output_dir tasindi/temizlendi, antivirus
+    karantinaya aldi vb.) "/d/a" KORU KORUNE atlanmamali -- yeniden alma
+    dongusune sokulmali. "/d/b"nin yerel kopyasi GERCEKTEN varsa o yine de
+    atlanmali (eski davranis bozulmamali)."""
+    fs = FakeLinuxFS({"/d/a": b"1", "/d/b": b"2", "/d/c": b"3"})
+    out = tmp_path / "out"
+    out.mkdir()
+    (out / "b").write_bytes(b"2")  # sadece b'nin yerel kopyasi GERCEKTEN var
+    state = {
+        "acquired_files": ["/d/a", "/d/b"],
+        "acquired_detail": [
+            {"remote_path": "/d/a", "local_path": str(out / "a"), "sha256": "eski-yanlis-hash"},
+            {"remote_path": "/d/b", "local_path": str(out / "b"), "sha256": "h"},
+        ],
+    }
+    manifest = fa.acquire_logical_image(fs, "/d", str(out), resume_state=state)
+
+    assert "/d/a" in fs.dd_calls, "yerel kopyasi kayip olan dosya YENIDEN cekilmeli"
+    assert "/d/b" not in fs.dd_calls, "yerel kopyasi hala var olan dosya atlanmaya devam etmeli"
+    assert "/d/c" in fs.dd_calls
+
+    alinan = {a["remote_path"]: a for a in manifest["acquired"]}
+    assert set(alinan) == {"/d/a", "/d/b", "/d/c"}
+    # Yeniden cekilen dosyanin hash'i, kaybolan/gecersiz ESKI degerle degil,
+    # GERCEK icerikle eslesmeli -- stale kayit duzgunce degistirilmis olmali.
+    assert alinan["/d/a"]["sha256"] == hashlib.sha256(b"1").hexdigest()
+    assert (out / "a").read_bytes() == b"1"
+    # manifest["acquired"]'da "/d/a" icin sadece TEK bir kayit olmali
+    # (eski stale kayit + yeni kayit CIFT girmemeli).
+    assert sum(1 for a in manifest["acquired"] if a["remote_path"] == "/d/a") == 1
 
 
 def test_logical_should_stop_halts_early_and_preserves_manifest_for_resume(tmp_path):

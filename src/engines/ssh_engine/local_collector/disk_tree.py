@@ -25,44 +25,63 @@ class DiskTreeError(Exception):
     """Imaj hic acilamadi (dosya yok, bos, taninmayan format vb.)."""
 
 
-def _walk(fs, directory, prefix, node, sayac):
-    for entry in directory:
-        if sayac[0] >= MAX_ENTRIES:
-            raise DiskTreeError(f"Dosya sistemi {MAX_ENTRIES} dugumden fazla iceriyor, agac kesildi.")
-        try:
-            isim = entry.info.name.name.decode("utf-8", errors="replace")
-        except AttributeError:
-            continue
-        if isim in (".", ".."):
-            continue
-        meta = entry.info.meta
-        if meta is None:
-            continue  # silinmis/tutarsiz girdi, meta bilgisi yok
-
-        yol = f"{prefix}/{isim}"
-        if meta.type == pytsk3.TSK_FS_META_TYPE_DIR:
+def _walk(fs, kok_dizin, kok_node, sayac):
+    """Dizin agacini ITERATIF (yigin/stack tabanli) gezer -- kasitli olarak
+    REKURSIF DEGIL. Rekursif bir gezinme her dizin seviyesinde bir Python
+    cagri (stack) frame'i tuketir; dongusel/bozuk bir dizin yapisinda
+    (ör. A -> B -> A -> ...) bu, `sayac` MAX_ENTRIES'e ULASMADAN COK ONCE
+    Python'un varsayilan rekursion limitine (~1000) carpip RecursionError
+    firlatirdi. RecursionError bir RuntimeError'dur ve open_disk_tree'nin
+    per-bolum try/except'i (OSError/IOError/DiskTreeError) bunu YAKALAMAZ --
+    boylece tum open_disk_tree cagrisi cokerdi. Yigin tabanli gezinmede
+    derinlik Python cagri yigina degil bu fonksiyonun kendi listesine
+    baglidir (ki zaten sayac ile MAX_ENTRIES'te sinirlandirilir), bu yuzden
+    RecursionError riski TAMAMEN ortadan kalkar."""
+    yigin = [(kok_dizin, kok_node)]
+    while yigin:
+        dizin, node = yigin.pop()
+        for entry in dizin:
+            if sayac[0] >= MAX_ENTRIES:
+                raise DiskTreeError(f"Dosya sistemi {MAX_ENTRIES} dugumden fazla iceriyor, agac kesildi.")
             try:
-                alt_dizin = entry.as_directory()
-            except (OSError, IOError):
-                node[isim] = {}  # acilamadi (bozuk), bos klasor olarak goster
+                isim = entry.info.name.name.decode("utf-8", errors="replace")
+            except AttributeError:
                 continue
-            alt_node = {}
-            node[isim] = alt_node
-            sayac[0] += 1
-            _walk(fs, alt_dizin, yol, alt_node, sayac)
-        elif meta.type == pytsk3.TSK_FS_META_TYPE_REG:
-            # Yaprak degeri: (inode, boyut) -- cift tiklamada icerigi
-            # cikarmak icin gerekli (bkz. extract_file). build_path_tree'nin
-            # aksine (yaprak = str yol) burada tuple -- karistirilmasinlar.
-            node[isim] = (meta.addr, meta.size)
-            sayac[0] += 1
-        # Diger turler (sembolik link, aygit vb.) bilerek gosterilmiyor --
-        # ne icerik goruntuleme ne cikarma bunlar icin anlamli.
+            if isim in (".", ".."):
+                continue
+            meta = entry.info.meta
+            if meta is None:
+                continue  # silinmis/tutarsiz girdi, meta bilgisi yok
+
+            if meta.type == pytsk3.TSK_FS_META_TYPE_DIR:
+                try:
+                    alt_dizin = entry.as_directory()
+                except (OSError, IOError):
+                    node[isim] = {}  # acilamadi (bozuk), bos klasor olarak goster
+                    # Basarisiz da olsa bu bir "girdi denemesi" -- sayilmazsa
+                    # binlerce acilamayan-ama-DIR-tipinde-gorunen girdi iceren
+                    # bozuk bir imaj MAX_ENTRIES'i hic tetiklemeden sinirsiz
+                    # bellek buyumesine yol acar (bu sabitin korumaya calistigi
+                    # tam olarak bu senaryo).
+                    sayac[0] += 1
+                    continue
+                alt_node = {}
+                node[isim] = alt_node
+                sayac[0] += 1
+                yigin.append((alt_dizin, alt_node))
+            elif meta.type == pytsk3.TSK_FS_META_TYPE_REG:
+                # Yaprak degeri: (inode, boyut) -- cift tiklamada icerigi
+                # cikarmak icin gerekli (bkz. extract_file). build_path_tree'nin
+                # aksine (yaprak = str yol) burada tuple -- karistirilmasinlar.
+                node[isim] = (meta.addr, meta.size)
+                sayac[0] += 1
+            # Diger turler (sembolik link, aygit vb.) bilerek gosterilmiyor --
+            # ne icerik goruntuleme ne cikarma bunlar icin anlamli.
 
 
 def _tree_from_fs(fs):
     node = {}
-    _walk(fs, fs.open_dir(path="/"), "", node, [0])
+    _walk(fs, fs.open_dir(path="/"), node, [0])
     return node
 
 
@@ -89,15 +108,33 @@ def open_disk_tree(image_path):
     if vs is None:
         bolumler = [{"description": None, "offset": 0}]
     else:
-        bolumler = [
-            {"description": part.desc.decode("utf-8", errors="replace"), "offset": part.start * vs.info.block_size}
-            for part in vs
-            if int(part.flags) == pytsk3.TSK_VS_PART_FLAG_ALLOC
-        ]
+        # DIKKAT: her partition entry'si AYRI try/except icinde okunuyor --
+        # tek bir entry'nin desc/start/flags alani None ya da beklenmedik
+        # olursa (bozuk bolum tablosu), bu SADECE o bolumu "hatali" olarak
+        # isaretlemeli, asagidaki per-bolum FS ayristirma izolasyonuyla
+        # TUTARLI sekilde diger bolumlerin enumerasyonunu ETKILEMEMELI --
+        # eskiden bu bir liste comprehension'iydi ve herhangi bir entry'de
+        # patlarsa TUM open_disk_tree cagrisini cokertiyordu.
+        bolumler = []
+        for part in vs:
+            try:
+                if int(part.flags) != pytsk3.TSK_VS_PART_FLAG_ALLOC:
+                    continue
+                bolumler.append({
+                    "description": part.desc.decode("utf-8", errors="replace"),
+                    "offset": part.start * vs.info.block_size,
+                    "enum_error": None,
+                })
+            except (AttributeError, TypeError, ValueError) as exc:
+                bolumler.append({"description": None, "offset": None, "enum_error": str(exc)})
 
     sonuc = []
     for bolum in bolumler:
         girdi = {"description": bolum["description"], "offset": bolum["offset"], "tree": None, "error": None}
+        if bolum.get("enum_error"):
+            girdi["error"] = bolum["enum_error"]
+            sonuc.append(girdi)
+            continue
         try:
             fs = pytsk3.FS_Info(img, offset=bolum["offset"])
             girdi["tree"] = _tree_from_fs(fs)
@@ -115,6 +152,12 @@ def extract_file(image_path, offset, inode, dest_path, chunk_size=1024 * 1024):
     img = pytsk3.Img_Info(image_path)
     fs = pytsk3.FS_Info(img, offset=offset)
     dosya = fs.open_meta(inode=inode)
+    if dosya.info.meta is None:
+        # _walk zaten bu durumu kontrol edip atliyordu (silinmis/tutarsiz
+        # girdi, meta bilgisi yok) ama extract_file inode uzerinden AYRI
+        # bir parse yapiyor -- ayni riski tasir, guard'i yoksa None.size
+        # erisiminde yakalanmamis AttributeError firlatirdi.
+        raise DiskTreeError(f"Dosya (inode={inode}) meta bilgisi okunamadi (silinmis/tutarsiz girdi).")
     boyut = dosya.info.meta.size
     with open(dest_path, "wb") as hedef:
         okunan = 0

@@ -80,14 +80,27 @@ _current_log_file = None
 def _get_log_file():
     """
     Bu çalıştırma için ayrılmış log dosyasının yolunu döner; yoksa
-    logs/case_<tarih-saat>.log adında yeni bir dosya oluşturur.
+    logs/case_<tarih-saat>-<pid>.log adında yeni bir dosya oluşturur.
+
+    Dosya adına os.getpid() eklenmesi: sadece saniye hassasiyetli bir
+    zaman damgası, iki SÜREÇ (örn. SSH motoru + RAM motoru, ya da iki GUI
+    örneği) AYNI saniyede başlarsa BENZERSİZ değildir -- ikisi de aynı
+    case_<timestamp>.log dosyasına yazıp olayları birbirine karıştırırdı
+    (forensic_report.py'nin read_events() zaman-penceresi filtresi bunu
+    AYIRAMAZ, iki vakanın delili karışabilir). PID süreçler arası
+    çarpışmayı engeller; aynı sürecin kendi içindeki tüm log_event()
+    çağrıları zaten bu modül-seviyesi _current_log_file önbelleği
+    sayesinde hep AYNI dosyaya yazar (istenen/değişmeyen davranış).
+    Mevcut "case_<tarih-saat>" ön-eki korunduğu için (sadece sona bir
+    bileşen eklendi), bu formatı bugüne kadar üreten/okuyan hiçbir kod
+    (grep "case_" ile kontrol edildi) bozulmaz.
     """
     global _current_log_file
 
     if _current_log_file is None:
         os.makedirs(LOG_DIR, exist_ok=True)
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-        _current_log_file = os.path.join(LOG_DIR, f"case_{timestamp}.log")
+        _current_log_file = os.path.join(LOG_DIR, f"case_{timestamp}-{os.getpid()}.log")
 
     return _current_log_file
 
@@ -138,8 +151,22 @@ def get_log_file_path():
     """
     Bu çalıştırma için kullanılan log dosyasının tam yolunu döner (henüz
     oluşturulmadıysa oluşturur).
+
+    log_event()'in aksine eskiden bu fonksiyon _get_log_file()'ı hiç
+    try/except'e almıyordu -- bir dosya sistemi hatası (disk dolu,
+    salt-okunur, USB çıkarılmış) os.makedirs'tan gelen OSError'ı
+    YAKALAMADAN çağırana (örn. forensic_report.to_dict(), gui_v2.py'nin
+    özet ekranı) sızdırıp modülün kendi tasarım hedefini ("Log dosyasına
+    yazılamazsa program çökmemeli") bozuyordu. Artık log_event() ile AYNI
+    şekilde hatayı yakalar, çökmek yerine None döner -- çağıran taraf
+    (bkz. read_events_with_status()) bunu "log dosyasına ulaşılamadı"
+    olarak ele alır.
     """
-    return _get_log_file()
+    try:
+        return _get_log_file()
+    except OSError as e:
+        print(f"[LOG HATASI] Log dosyasi yolu belirlenemedi: {e}")
+        return None
 
 
 def read_events(log_file_path=None, start_time_utc=None, end_time_utc=None):
@@ -152,35 +179,74 @@ def read_events(log_file_path=None, start_time_utc=None, end_time_utc=None):
     araliktaki olaylar donulur -- log dosyasi tum oturum boyunca tek
     dosya oldugu icin (birden fazla alma islemi ayni dosyaya yazabilir),
     tek bir alma islemine ait rapor sadece kendi olaylarini icersin diye.
+
+    Geriye donuk uyumluluk icin imza/davranis (bos liste = "olay yok" YA
+    DA "log dosyasina ulasilamadi") DEGISTIRILMEDI -- iki durumu ayirt
+    etmek gerekiyorsa read_events_with_status() kullanilmali.
     """
-    path = log_file_path or get_log_file_path()
+    return read_events_with_status(log_file_path, start_time_utc, end_time_utc)["events"]
+
+
+def read_events_with_status(log_file_path=None, start_time_utc=None, end_time_utc=None):
+    """
+    read_events() ile AYNI olay listesini doner, ama ayrica log dosyasina
+    gercekten ulasilip ulasilamadigini belirten "log_file_found" alanini
+    ekler.
+
+    Eskiden read_events(), log dosyasi YOKSA (silinmis/USB cikarilmis)
+    SESSIZCE bos liste donuyordu -- forensic_report.to_dict() bunu
+    "chain_of_custody.events: []" olarak rapora gecirip incelemeciye
+    "hic olay olmadi" ile "delil kaybedildi/log'a ulasilamadi" arasindaki
+    farki HIC BILDIRMIYORDU. Bu fonksiyon o ayrimi acikca doner --
+    forensic_report.to_dict() "log_dosyasi_bulundu" alanini buradan
+    dolduruyor.
+
+    Donus: {"events": [dict, ...], "log_file_found": bool}
+    """
+    path = log_file_path
+    if path is None:
+        path = get_log_file_path()
+        if path is None:
+            # Log dosyasinin yolu bile belirlenemedi (orn. LOG_DIR
+            # olusturulamadi) -- dosyaya KESINLIKLE ulasilamadi.
+            return {"events": [], "log_file_found": False}
+
     events = []
     if not os.path.exists(path):
-        return events
+        return {"events": events, "log_file_found": False}
 
-    with open(path, "r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            parts = [p.strip() for p in line.split("|")]
-            if len(parts) != 4:
-                continue
-            ts_raw, event_type, description, hash_part = parts
-            ts = ts_raw.strip("[]")
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                parts = [p.strip() for p in line.split("|")]
+                if len(parts) != 4:
+                    continue
+                ts_raw, event_type, description, hash_part = parts
+                ts = ts_raw.strip("[]")
 
-            if start_time_utc and ts < start_time_utc:
-                continue
-            if end_time_utc and ts > end_time_utc:
-                continue
+                if start_time_utc and ts < start_time_utc:
+                    continue
+                if end_time_utc and ts > end_time_utc:
+                    continue
 
-            events.append({
-                "timestamp_utc": ts,
-                "event": event_type,
-                "description": description,
-                "hash": None if hash_part == "-" else hash_part,
-            })
-    return events
+                events.append({
+                    "timestamp_utc": ts,
+                    "event": event_type,
+                    "description": description,
+                    "hash": None if hash_part == "-" else hash_part,
+                })
+    except OSError as e:
+        # Dosya var gibi gorunup (os.path.exists gecti) tam bu sirada
+        # erisilemez hale gelmis olabilir (orn. USB tam bu anda cikarildi)
+        # -- log_event()'teki AYNI gerekce: program cokmemeli, ama bu
+        # durumda su ana kadar toplanan olaylar EKSIK sayilmali.
+        print(f"[LOG HATASI] Log dosyasi okunamadi: {e}")
+        return {"events": events, "log_file_found": False}
+
+    return {"events": events, "log_file_found": True}
 
 
 if __name__ == "__main__":

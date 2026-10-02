@@ -52,14 +52,51 @@ def remote_path_kind(ssh, remote_path, password=None):
     return None
 
 
+def _find_inaccessible_dirs(ssh, root, xdev=False):
+    """root altinda GIRILEMEYEN (execute izni olmayan) ya da OKUNAMAYAN
+    dizinlerin yollarini tek bir `find` komutuyla toplu tespit eder.
+
+    Neden gerekli: duz `find {root} ... -type f`, boyle bir dizinin ICINE
+    hic giremez -- altindaki TUM dosyalar hicbir hata/kayit birakmadan
+    sessizce listeden eksik kalir (find sadece kendi stderr'ine bir uyari
+    yazar, o da hicbir yerde toplanmiyordu). Bu fonksiyon dizinin KENDISINI
+    raporlar; find kendisi de o dizine giremedigi icin ICERIGININ tam
+    listesi cikarilamaz -- en azindan NEREDE veri kaybi oldugu delil
+    zincirinde/manifest'te iz birakir (bkz. list_remote_files/
+    list_logical_files).
+
+    Sadece sudo parolasi YOKKEN cagrilir (bkz. cagiranlardaki `if not
+    password` kontrolu) -- root olarak calisirken bu izin sinifi zaten
+    sorun degil."""
+    safe = shlex.quote(root)
+    xdev_flag = "-xdev " if xdev else ""
+    cmd = f"find {safe} {xdev_flag}-type d \\( ! -readable -o ! -executable \\)"
+    out, _err, _code = ssh.run_command(cmd)
+    return [s for s in (out or "").splitlines() if s.strip()]
+
+
 def list_remote_files(ssh, remote_dir, password=None):
-    """remote_dir altindaki (recursive) tum dosyalarin (klasor haric) yollarini doner."""
+    """remote_dir altindaki (recursive) tum dosyalarin (klasor haric) yollarini
+    doner.
+
+    Sudo parolasi YOKSA, `find`'in kendisinin hic GIREMEDIGI (izinsiz)
+    alt dizinler ayrica tespit edilip delil zincirine EXAM_ERROR olarak
+    loglanir -- aksi halde o dizinin altindaki TUM dosyalar, donen listede
+    hicbir iz birakmadan eksik kalirdi (bkz. list_logical_files, ayni
+    sorunu manifest'e de isleyen tam surumu icin; bu fonksiyon geriye
+    dönük uyumluluk icin duz bir liste dondurmeye devam ediyor, sadece
+    LOGLUYOR)."""
     safe = shlex.quote(remote_dir)
     cmd = f"find {safe} -type f"
     if password:
         out, _err, _code = ssh.run_command(cmd, sudo_password=password)
     else:
         out, _err, _code = ssh.run_command(cmd)
+        for dizin in _find_inaccessible_dirs(ssh, remote_dir):
+            coc.log_event(
+                coc.EVENT_EXAM_ERROR,
+                f"Dizine girilemedi (izin yok), altindaki dosyalar listeye hic girmedi: {dizin}",
+            )
     if not out:
         return []
     return [satir for satir in out.splitlines() if satir.strip()]
@@ -79,6 +116,15 @@ def list_logical_files(ssh, remote_root, password=None):
     Sudo parolasi YOKSA okunamayan dosyalar (find ! -readable) TEK bir
     komutla toplu tespit edilir ve alma dongusune hic sokulmaz -- aksi
     halde her biri 4 yeniden denemeyle (hash+okuma) zaman kaybettirirdi.
+    Ayni sekilde, GIRILEMEYEN (execute izni olmayan) alt dizinler de ayri
+    bir taramayla (_find_inaccessible_dirs) tespit edilip onceden_basarisiz'a
+    eklenir -- aksi halde duz `find -xdev -type f` boyle bir dizinin ICINE
+    hic inemeyecegi icin altindaki TUM dosyalar listede HICBIR IZ
+    BIRAKMADAN eksik kalirdi (adli bir arac icin ciddi bir bosluk: manifest
+    "eksiksiz" gorunur ama okunamayan bir alt agacin tum icerigi delil
+    zincirinde hic gorunmez). find kendisi de o dizine giremedigi icin
+    ICERIGININ tam listesi cikarilamiyor -- raporlanan sadece dizinin
+    KENDISI, ama en azindan NEREDE veri kaybi oldugu artik iz birakiyor.
 
     Donus: (dosyalar, onceden_basarisiz, dislanan) -- ikisi de {yol: sebep}.
     onceden_basarisiz BEKLENMEYEN eksikler (izin yok); dislanan bilerek
@@ -97,6 +143,9 @@ def list_logical_files(ssh, remote_root, password=None):
             if s.strip():
                 onceden_basarisiz[s] = "izin yok (okunamiyor)"
         dosyalar = [d for d in dosyalar if d not in onceden_basarisiz]
+
+        for dizin in _find_inaccessible_dirs(ssh, remote_root, xdev=True):
+            onceden_basarisiz[dizin] = "dizine girilemedi (izin yok)"
     return dosyalar, onceden_basarisiz, {}
 
 
@@ -185,7 +234,19 @@ def _get_remote_file_block_hash(ssh, remote_path, block_no, block_size_mb, passw
 
 def _acquire_raw_file_block(ssh, remote_path, block_no, block_size_mb, password):
     """image_acquirer.acquire_raw_block ile AYNI desen -- ham bayt icin
-    run_command() degil dogrudan ssh.client.exec_command() kullanilir."""
+    run_command() degil dogrudan ssh.client.exec_command() kullanilir.
+
+    stderr, stdout'tan SONRA ama recv_exit_status()'tan ONCE mutlaka
+    okunur (bosaltilir) -- run_command()'da bulunup duzeltilen AYNI
+    paramiko kanal kilitlenme deseni (bkz. ssh_connector.py/docs/
+    roadmap.md) burada, run_command()'dan BAGIMSIZ bu dogrudan
+    exec_command() yolunda da gecerliydi: uzak `sudo`/`dd` stderr'e
+    (orn. "sudo: no tty present" gibi) kanalin flow-control penceresini
+    asacak kadar yazarsa, kimse stderr'i okumadigi icin uzak taraf orada
+    tikanir, exit etmez, recv_exit_status() SONSUZA KADAR bekler --  tum
+    alma thread'i kilitlenir. stdout ham bayt oldugu (decode edilmiyor)
+    icin set_combine_stderr(True) KULLANILMADI -- stderr stdout'a karisirsa
+    blok verisi bozulurdu; bunun yerine stderr ayrica okunup atiliyor."""
     dd_cmd = (
         f"dd if={shlex.quote(remote_path)} bs={block_size_mb}M skip={block_no} count=1 "
         f"status=none"
@@ -198,6 +259,7 @@ def _acquire_raw_file_block(ssh, remote_path, block_no, block_size_mb, password)
         else:
             stdin, stdout, stderr = ssh.client.exec_command(dd_cmd)
         veri = stdout.read()
+        stderr.read()  # kanal kilitlenmesin diye bosaltilir, icerigi kullanilmiyor
         exit_status = stdout.channel.recv_exit_status()
         if exit_status != 0:
             return None
@@ -215,6 +277,10 @@ def acquire_remote_file(ssh, remote_path, local_path, password=None, block_size_
     BLOKTAN devam eder (MAX_RETRY_PER_BLOCK deneme), tum dosyayi bastan
     cekmez -- eski (tek parca `cat`) davranisin aksine.
 
+    Kalici olarak basarisiz olunursa (bkz. MAX_RETRY_PER_BLOCK, ensure_connection),
+    o ana kadar diske yazilmis YARIM/DOGRULANMAMIS dosya BIRAKILMAZ --
+    local_path silinir, sadece (False, None) donulur.
+
     Donus: (basarili: bool, sha256: str veya None) -- imza eskiyle AYNI,
     acquire_remote_tree'nin cagirma seklinde degisiklik gerekmiyor.
     """
@@ -230,6 +296,7 @@ def acquire_remote_file(ssh, remote_path, local_path, password=None, block_size_
 
     os.makedirs(os.path.dirname(local_path) or ".", exist_ok=True)
     hasher = hashlib.sha256()
+    kalici_basarisiz = False
 
     with open(local_path, "wb") as cikti:
         for block_no in range(total_blocks):
@@ -239,7 +306,8 @@ def acquire_remote_file(ssh, remote_path, local_path, password=None, block_size_
 
             while retry_count <= MAX_RETRY_PER_BLOCK and not block_ok:
                 if not ensure_connection(ssh):
-                    return False, None
+                    kalici_basarisiz = True
+                    break
 
                 uzak_hash = _get_remote_file_block_hash(ssh, remote_path, block_no, block_size_mb, password)
                 if uzak_hash is None:
@@ -257,11 +325,27 @@ def acquire_remote_file(ssh, remote_path, local_path, password=None, block_size_
 
                 block_ok = True
 
-            if not block_ok:
-                return False, None
+            if kalici_basarisiz or not block_ok:
+                kalici_basarisiz = True
+                break
 
             cikti.write(veri)
             hasher.update(veri)
+
+    if kalici_basarisiz:
+        # Dosya kalici olarak basarisiz oldu -- diskte kalan, ONCEKI
+        # (basarili) bloklardan olusan YARIM/DOGRULANMAMIS veriyi sil.
+        # Aksi halde bu dosya manifest_files.json'a HIC GIRMEDIGI halde
+        # (acquire_remote_tree onu sadece failed/failed_reasons'a ekler,
+        # asla acquired'a) output_dir'de KALICI olarak durur -- manifest
+        # yerine dogrudan cikti klasorune bakan biri bunu gercek/dogrulanmis
+        # delil sanabilir. Silme basarisiz olursa (izin, kilitli dosya vb.)
+        # asil hatayi gizlemesin diye sessizce devam edilir.
+        try:
+            os.remove(local_path)
+        except OSError:
+            pass
+        return False, None
 
     return True, hasher.hexdigest()
 
@@ -310,6 +394,16 @@ def acquire_remote_tree(ssh, remote_root, output_dir, password=None, progress_ca
     her blok sonrasi manifest guncellemesiyle AYNI desen. Bu, output_dir
     icindeki manifest_files.json'dan (islem SONUCUNUN kalici ozeti, resume
     icin degil, her zaman ayrica yazilir) FARKLI bir dosyadir.
+
+    resume_state'teki "acquired_files"a KORU KORUNE guvenilmez -- her
+    dosya, atlanmadan ONCE yerel cikti dosyasinin HALA VAR olup olmadigi
+    (os.path.exists) kontrol edilir; yoksa (onceki calisma coktukten
+    sonra output_dir tasinmis/temizlenmis, antivirus karantinaya almis,
+    disk degismis vb.) o dosya yeniden alma dongusune geri konur. Tam
+    hash yeniden dogrulamasi BILINCLI olarak yapilmiyor (bkz. docs/
+    kararlar.md) -- cok dosyali bir resume'da her dosyayi yeniden hash'lemek
+    pahali olurdu; varlik kontrolu en azindan "yerel dosya tamamen yok"
+    durumunu (asil bildirilen senaryo) yakalar.
 
     should_stop: verilirse, her dosyadan ONCE (o an islenmekte olan dosya
     tamamlanmadan asla kesilmez) cagirilir; True donerse dongu erken
@@ -396,14 +490,35 @@ def acquire_remote_tree(ssh, remote_root, output_dir, password=None, progress_ca
             )
             break
 
-        if uzak_dosya in onceden_alinan:
-            if progress_callback:
-                progress_callback(i + n_pre, toplam)
-            continue
-
         goreli = os.path.relpath(uzak_dosya, taban) if taban else os.path.basename(uzak_dosya)
         goreli = goreli.replace("/", os.sep)
         yerel_dosya = os.path.join(output_dir, goreli)
+
+        if uzak_dosya in onceden_alinan:
+            # Onceki calisma bu dosyayi "alindi" diye isaretlemis olabilir,
+            # ama yerel cikti dosyasi o ISARETLEMEDEN SONRA kaybolmus
+            # olabilir (program coktu ve output_dir'deki yarim klasor
+            # tasindi/temizlendi, antivirus karantinaya aldi, output_dir'i
+            # tutan disk degisti, vb.) -- resume_state'e KORU KORUNE
+            # guvenip atlarsak, nihai manifest o dosyayi yerel kopya
+            # yokken/bozukken "basariyla alindi ve hash dogrulandi" diye
+            # raporlar. Bu yuzden atlamadan ONCE en azindan dosyanin hala
+            # VAR olup olmadigi kontrol edilir (bkz. docs/kararlar.md --
+            # tam hash'i burada yeniden hesaplamak, ozellikle cok dosyali
+            # resume'da performans acisindan pahali oldugundan bilincli
+            # olarak sadece varlik kontrolu yapiliyor).
+            if os.path.exists(yerel_dosya):
+                if progress_callback:
+                    progress_callback(i + n_pre, toplam)
+                continue
+            onceden_alinan.discard(uzak_dosya)
+            if uzak_dosya in acquired_files:
+                acquired_files.remove(uzak_dosya)
+            sonuclar[:] = [s for s in sonuclar if s.get("remote_path") != uzak_dosya]
+            coc.log_event(
+                coc.EVENT_EXAM_ERROR,
+                f"Onceden alindi isaretli dosyanin yerel kopyasi bulunamadi, yeniden aliniyor: {uzak_dosya}",
+            )
 
         basarili, hash_deger = acquire_remote_file(ssh, uzak_dosya, yerel_dosya, password=password)
         if basarili:

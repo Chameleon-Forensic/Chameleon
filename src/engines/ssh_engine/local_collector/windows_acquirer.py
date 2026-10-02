@@ -131,7 +131,12 @@ def _block_read_script(disk_number, offset, length):
         f"$buf = New-Object byte[] {length}; "
         f"$read = $fs.Read($buf, 0, {length}); "
         f"$fs.Close(); "
-        f"if ($read -lt {length}) {{ $buf = $buf[0..([Math]::Max($read-1,0))] }}; "
+        # $read = 0 (orn. bozuk USB koprusu) icin $buf[0..($read-1)] = $buf[0..-1]
+        # PowerShell'de BOS DIZI degil 1 ELEMANLI ($buf[0], yani 0x00) bir dizi
+        # doner -- "sahte" bu tek bayt, bagimsiz okunan iki kopyada (hash +
+        # veri) AYNI sekilde uretilip hash karsilastirmasini YANLISLIKLA
+        # gecirir. $read=0 durumu ayrica ele alinip GERCEKTEN bos dizi dondurulur.
+        f"if ($read -le 0) {{ $buf = [byte[]]@() }} elseif ($read -lt {length}) {{ $buf = $buf[0..($read-1)] }}; "
     )
 
 
@@ -225,6 +230,17 @@ def acquire_disk_image_windows(
                 f"(Live modda beklenen bir durum; Offline modda bekleniyorsa incelenmeli): "
                 f"PhysicalDrive{disk_number}",
             )
+        elif hala_salt_okunur is None:
+            # SSH cagrisi basarisiz oldu -- diskin o anki durumu BILINMIYOR.
+            # True/False dallarinin amaci bu durumu delil zincirine kaydetmekti;
+            # sessizce atlanirsa "hala salt-okunur mu?" sorusu icin HICBIR
+            # kayit kalmaz, oysa tam bu yuzden kontrol ediliyordu.
+            coc.log_event(
+                coc.EVENT_EXAM_ERROR,
+                f"Devam ederken kontrol edilemedi (Windows, SSH hatasi): disk "
+                f"PhysicalDrive{disk_number}'in salt-okunur durumu DOGRULANAMADI, "
+                f"delil zincirine bakilmali",
+            )
         apply_write_blocker = False
     else:
         coc.log_event(coc.EVENT_EXAM_START, f"Imaj alma baslatildi (Windows): PhysicalDrive{disk_number}")
@@ -270,7 +286,12 @@ def acquire_disk_image_windows(
     if resume_state:
         acquired_blocks = list(resume_state.get("acquired_blocks", []))
         failed_blocks = list(resume_state.get("failed_blocks", []))
-        block_paths = dict(resume_state.get("block_paths", {}))
+        # json.load'dan gelen manifestte anahtarlar STRING'dir ("0", "1", ...) --
+        # int'e cevrilmezse asagida YENI eklenen (int anahtarli) bloklarla
+        # karisir ve concatenate_blocks/write_segments'teki "i not in
+        # block_paths" (int i) kontrolu resume ONCESI alinan hicbir blogu
+        # BULAMAZ (hepsi "eksik" sayilir, oysa hepsi diskte ve dogrulanmis).
+        block_paths = {int(k): v for k, v in resume_state.get("block_paths", {}).items()}
     else:
         acquired_blocks = []
         failed_blocks = []
@@ -293,6 +314,7 @@ def acquire_disk_image_windows(
                 "manifest_path": manifest_path,
                 "resume_from": block_no,
                 "user_stopped": True,
+                "started_at_utc": started_at_utc,
             }
 
         retry_count = 0
@@ -319,6 +341,7 @@ def acquire_disk_image_windows(
                     "output_dir": output_dir,
                     "manifest_path": manifest_path,
                     "resume_from": block_no,
+                    "started_at_utc": started_at_utc,
                 }
 
             uzak_hash = get_remote_block_hash_windows(ssh, disk_number, block_no, block_size_mb)

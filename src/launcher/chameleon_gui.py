@@ -1582,7 +1582,15 @@ class ChameleonWindow(QMainWindow):
         guncellenmiyor), tema ya da dil degisince tek care butun kabugu
         yikip yeniden kurmak -- eski Tk suruminun _toggle_theme() ->
         _build_shell() deseniyle ayni.
+
+        DIKKAT: setCentralWidget() ESKI central widget'i (ve tum cocuklarini)
+        siler. _active_tool_widget / _return_page o agacta duruyorsa, bu
+        fonksiyon onlari da siler ve referanslar dahada silinmis Qt nesnelerine
+        döner -- sonraki resume/return çağrısı PySide6 RuntimeError ile
+        coker. Bu yüzden yıkım ONCESI referanslar temizlenir (bkz.
+        _drop_preserved_pages).
         """
+        self._drop_preserved_pages()
         self.setWindowTitle(t("title", self.lang))
 
         central = QWidget()
@@ -1599,6 +1607,33 @@ class ChameleonWindow(QMainWindow):
         root_layout.addWidget(self.stack_container, stretch=1)
 
         self.setCentralWidget(central)
+
+    def _drop_preserved_pages(self):
+        """_build_shell yikiminden ONCE cagrilir: korunmus arac ekrani
+        (_active_tool_widget) ve Geri-donus sayfasi (_return_page) henuz
+        ESKI central widget'in cocugu -- setCentralWidget() onlari silecek,
+        referanslar daha sonra silinmis nesnelere doner ve sonraki
+        _resume_active_tool/_return_from_help cagrisi PySide6 RuntimeError
+        ile cokerdi (tema/dil degisiminde sessiz cokme; temalar Ayarlar
+        sayfasinda degistirildigi icin nadir ama gercek). Referanslari
+        BURADA temizliyoruz: Qt zaten widget'i silecek, biz sadece
+        "hala yasiyor" sanan attribute'lari sifirliyoruz (deleteLater
+        cagirmiyoruz -- nesne zaten silinecek, cift silme riski olmasin).
+        """
+        for attr in ("_active_tool_widget", "_return_page"):
+            w = getattr(self, attr, None)
+            if w is None:
+                continue
+            try:
+                # Nesnenin hala yasiyor olup olmadigini kontrol et; silinmis
+                # nesneye dokunmadan sadece referansi birakacagiz.
+                if attr == "_active_tool_widget":
+                    self._active_tool_kind = None
+                    self._active_tool_method = None
+            except RuntimeError:
+                pass
+            setattr(self, attr, None)
+        self._return_nav = None
 
     def _apply_theme(self, mode):
         """QApplication'in genel QSS'ini yeniden uygular + kabugu (ve
@@ -2559,7 +2594,13 @@ class ChameleonWindow(QMainWindow):
             return
         if SSH_ENGINE_DIR not in sys.path:
             sys.path.insert(0, SSH_ENGINE_DIR)
-        import forensic_report
+        try:
+            import forensic_report
+        except ImportError as exc:
+            # _show_case_history'deki AYNI hata durumu -- modul yuklenemezse
+            # (orn. bozuk kurulum) cokmek yerine durum satirina yaz.
+            self._history_status.setText(t("case_history_load_error", lang, exc=exc))
+            return
         try:
             forensic_report.export_pdf(report_path, path)
         except Exception as exc:
@@ -2681,9 +2722,13 @@ class ChameleonWindow(QMainWindow):
                 goto_btn.clicked.connect(self._show_home)
             else:
                 details = veri.get("details", {})
+                # case_notes da on-doldurulur -- record_start details'e
+                # case_notes koymuyor ama ileride eklenirse dogru akar; diger
+                # 4 alan vaka bilgileriyle ayni (bkz. _show_case_info).
                 case_prefill = {
                     "case_id": details.get("case_id", ""), "examiner": details.get("examiner", ""),
                     "custodian": details.get("custodian", ""), "organization": details.get("organization", ""),
+                    "case_notes": details.get("case_notes", ""),
                 }
                 goto_btn = widgets.SecondaryButton(t("btn_reopen_ram_screen", lang))
                 goto_btn.clicked.connect(lambda _checked=False, c=case_prefill: self._open_ram_engine(c))

@@ -176,3 +176,107 @@ def test_export_pdf_produces_file_with_turkish_characters(tmp_path):
 def test_export_pdf_raises_for_missing_report(tmp_path):
     with pytest.raises(FileNotFoundError):
         fr.export_pdf(str(tmp_path / "yok.json"), str(tmp_path / "out.pdf"))
+
+
+def test_export_pdf_escapes_unbalanced_reportlab_markup_in_free_text_fields(tmp_path):
+    """Regresyon: case_notes/organization/failed_items vb. serbest metin
+    alanlari dengesiz reportlab pseudo-XML markup (orn. kapanmamis bir
+    '<font ...>' ya da tek basina '</b>') icerirse export_pdf() artik
+    ValueError('paraparser: syntax error ...') ile COKMEMELI -- g() (ve
+    olay satirlari) artik to_html()'deki esc() ile AYNI mantikla
+    (html.escape) kaciriyor."""
+    sample = {
+        "tool": {"name": "Chameleon", "version": "0.1.0", "engine": "ssh_engine", "method": "disk"},
+        "case": {
+            "case_id": "VAKA-TEST",
+            "examiner": "İnceleyen",
+            "organization": "</b> kapatilmamis etiket",
+            "custodian": "",
+            "case_notes": "kapatilmamis <font color=red>kirmizi",
+        },
+        "acquisition": {
+            "target_os": "linux", "target_host": "10.0.0.5", "source_identifier": "/dev/sdb",
+            "acquisition_type": "full_disk", "connection_method": "direct",
+            "start_time_utc": "2026-01-01T10:00:00Z", "end_time_utc": "2026-01-01T10:05:00Z",
+            "write_blocking_applied": True, "write_blocking_reason": "<b>kapatilmamis",
+        },
+        "integrity": {
+            "hash_algorithm": "SHA-256", "image_hash": "abc", "md5_hash": "def", "sha1_hash": "ghi",
+            "total_bytes": 100, "chunk_size_bytes": 4, "chunk_count": 1,
+        },
+        "result": {
+            "status": "success", "output_path": "C:/tmp/<img>.dd",
+            "failed_items": ["C:/tmp/a & b <eksik>"],
+        },
+        "verification": {"verified": True, "verified_at_utc": "2026-01-01T10:06:00Z", "hash_match": True},
+        "chain_of_custody": {
+            "log_file": "C:/tmp/coc.log",
+            "events": [
+                {
+                    "timestamp_utc": "2026-01-01T10:00:00Z",
+                    "event": "NOTE",
+                    "description": "</b><script>kirik & dengesiz</font>",
+                    "hash": None,
+                },
+            ],
+        },
+    }
+    json_path = tmp_path / "report.json"
+    pdf_path = tmp_path / "report.pdf"
+    json_path.write_text(json.dumps(sample), encoding="utf-8")
+
+    # ONCEDEN burada ValueError('paraparser: syntax error ...') firlatiliyordu.
+    fr.export_pdf(str(json_path), str(pdf_path))
+
+    assert pdf_path.is_file()
+    assert pdf_path.read_bytes()[:4] == b"%PDF"
+
+
+def test_finish_computes_missing_hash_independently_when_only_one_given(tmp_path):
+    """Regresyon: cagiran SADECE md5_hash (sha1_hash'i VERMEDEN) gecirirse,
+    sha1_hash sessizce None KALMAMALI -- kendi basina fallback'te dosyadan
+    hesaplanmali (ve tersi de gecerli)."""
+    dosya = tmp_path / "image.dd"
+    dosya.write_bytes(b"chameleon-test-verisi")
+    beklenen_md5 = hashlib.md5(dosya.read_bytes()).hexdigest()
+    beklenen_sha1 = hashlib.sha1(dosya.read_bytes()).hexdigest()
+
+    # Sadece md5_hash verildi -- sha1_hash None birakildi.
+    report = fr.ForensicReport()
+    report.start(engine="ssh_engine", method="disk")
+    report.finish(
+        status="success", output_path=str(dosya),
+        md5_hash="onceden-hesaplanmis-md5",
+    )
+    assert report.md5_hash == "onceden-hesaplanmis-md5"  # cagiranin verdigi ASLA ezilmedi
+    assert report.sha1_hash == beklenen_sha1  # verilmeyen fallback'te hesaplandi
+
+    # Sadece sha1_hash verildi -- md5_hash None birakildi.
+    report2 = fr.ForensicReport()
+    report2.start(engine="ssh_engine", method="disk")
+    report2.finish(
+        status="success", output_path=str(dosya),
+        sha1_hash="onceden-hesaplanmis-sha1",
+    )
+    assert report2.sha1_hash == "onceden-hesaplanmis-sha1"
+    assert report2.md5_hash == beklenen_md5
+
+
+def test_save_reads_chain_of_custody_log_only_once(tmp_path, isolated_coc_log, isolated_history, monkeypatch):
+    """Performans regresyonu: save() ayni report icin to_dict()'i (ve
+    dolayisiyla coc.read_events_with_status() ile TUM oturum log dosyasini)
+    JSON ve HTML uretimi icin AYRI AYRI degil, BIR KEZ hesaplamali."""
+    call_count = 0
+    orijinal = fr.coc.read_events_with_status
+
+    def sayan(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        return orijinal(*args, **kwargs)
+
+    monkeypatch.setattr(fr.coc, "read_events_with_status", sayan)
+
+    report = _build_sample_report()
+    report.save(str(tmp_path))
+
+    assert call_count == 1

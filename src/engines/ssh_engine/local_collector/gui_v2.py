@@ -90,12 +90,20 @@ def _save_recent_host(host, port, username):
     entries = [e for e in _load_recent_hosts() if e.get("host") != host]
     entries.insert(0, {"host": host, "port": port, "username": username})
     entries = entries[:_MAX_RECENT_HOSTS]
+    # Atomik yazma (gecici dosya + os.replace) -- dogrudan hedef dosyaya
+    # 'w' ile yazim, cokme/kesinti aninda yarim JSON birakip TUM gecmis
+    # kaybettirirdi (incomplete_ops.py'de duzeltilen AYNI desen).
     try:
         os.makedirs(os.path.dirname(_RECENT_HOSTS_FILE), exist_ok=True)
-        with open(_RECENT_HOSTS_FILE, "w", encoding="utf-8") as f:
+        tmp_yol = _RECENT_HOSTS_FILE + ".tmp"
+        with open(tmp_yol, "w", encoding="utf-8") as f:
             json.dump(entries, f, indent=2, ensure_ascii=False)
+        os.replace(tmp_yol, _RECENT_HOSTS_FILE)
     except OSError:
-        pass
+        try:
+            os.remove(_RECENT_HOSTS_FILE + ".tmp")
+        except OSError:
+            pass
 
 
 def format_duration_tr(seconds):
@@ -130,6 +138,28 @@ def build_path_tree(paths):
             dugum = dugum.setdefault(parca, {})
         dugum[parcalar[-1]] = yol
     return kok
+
+
+def _guvenli_onizleme_dosya_adi(inode, isim):
+    """Tam Disk agacindaki (disk_tree.py) bir dosyanin `isim`'ini, ONIZLEME
+    icin GECICI diskteki dosya adina donusturmeden once sanitize eder.
+
+    ONEMLI: `isim` pytsk3/Sleuthkit tarafindan dizin girdisinden HAM BAYT
+    olarak okunuyor -- disk_tree.py bunu hicbir OS dosya adi dogrulamasindan
+    GECIRMIYOR. Kotu amacli/bozuk bir imaj, adinda '/' veya '\\' ya da '..'
+    iceren bir girdi barindirabilir (path traversal, CWE-22); os.path.join
+    ile dogrudan birlestirilirse bu, GECICI KLASORUN DISINA yazmaya yol
+    acabilir. Bu yuzden `isim` gercek dosya adi olarak hic KULLANILMIYOR --
+    sadece gorunen/orijinal ismin uzantisi (varsa, salt gosterim/raporlama
+    amacli) korunuyor, dosyanin kendisi TSK'nin kendi urettigi inode
+    numarasina dayanan sabit bir adla yaziliyor."""
+    # Windows'ta hem '/' hem '\\' ayrac olabilir -- os.path.basename TEK
+    # basina YETMEZ (ör. Linux'ta calisirken '\\' ayrac sayilmaz), bu yuzden
+    # ikisini de elle temizliyoruz.
+    taban_isim = isim.replace("\\", "/").rsplit("/", 1)[-1]
+    _, nokta_var_mi, uzanti_ham = taban_isim.rpartition(".")
+    uzanti = "".join(ch for ch in uzanti_ham if ch.isalnum())[:16] if nokta_var_mi else ""
+    return f"inode{int(inode)}" + (f".{uzanti}" if uzanti else "")
 
 
 from ui_kit import theme_qt as ui, fonts, icons, widgets  # noqa: E402
@@ -233,6 +263,16 @@ def _restrict_key_file_permissions(path):
     metin JSON olarak kaliyor). Best-effort: izin ayarlanamazsa (orn.
     dosya sistemi desteklemiyorsa) sessizce gecilir, anahtar yine de
     yazilmis/okunabilir olur -- akisi durdurmaz.
+
+    Guvenlik duzeltmesi: Windows'ta icacls'a grant edilen hesap
+    DOMAIN\\kullanici biciminde OLMALI -- sade "kullanici", bilgisayar adi
+    ile kullanici adi ayni/a benzer oldugunda (orn. TOPRAK\\Toprak) BOS bir
+    hesaba cozunup grant sessizce BASARISIZ oluyordu (bu davranis
+    tests/test_logical_imaging.py'deki ACL-deny testinde zaten
+    belgelenmisti; ayni tuzak burada da gecerliydi) ve anahtar varsayilan
+    (miras alinmis, baska kullanicilarin erisebildigi) izinlerde kaliyordu.
+    Ayrica POSIX'te chmod sonrasi gercek izinler dogrulaniyor; group/other
+    bitleri hala aciksa logger ile UYARIYORUZ (sessiz basarisizlik yok).
     """
     try:
         os.chmod(path, 0o600)
@@ -240,14 +280,37 @@ def _restrict_key_file_permissions(path):
         pass
     if os.name == "nt":
         user = os.environ.get("USERNAME")
-        if user:
+        domain = os.environ.get("USERDOMAIN")
+        # DOMAIN\kullanici bicimi SART -- bkz. docstring ve
+        # tests/test_logical_imaging.py'deki ayni bulguya dayanan test.
+        hesap = f"{domain}\\{user}" if (user and domain) else user
+        if hesap:
             try:
-                subprocess.run(
-                    ["icacls", path, "/inheritance:r", "/grant:r", f"{user}:F"],
+                sonuc = subprocess.run(
+                    ["icacls", path, "/inheritance:r", "/grant:r", f"{hesap}:F"],
                     capture_output=True, check=False,
                 )
+                if sonuc.returncode != 0:
+                    print(
+                        f"[UYARI] Anahtar dosyasi izinleri (icacls) ayarlanamadi: "
+                        f"{hesap} -- dosya varsayilan izinlerde kalmis olabilir."
+                    )
             except OSError:
                 pass
+    else:
+        # POSIX: chmod'un gercekten uygulandigini dogrula (bazı dosya
+        # sistemleri, orn. bazı FAT/网络 mount'lari, chmod'u sessizce yok
+        # sayar) -- group/other bitleri aciksa uyari ver.
+        try:
+            mod = os.stat(path).st_mode
+            if mod & 0o077:
+                print(
+                    f"[UYARI] Anahtar dosyasi izinleri kisitlanamadi "
+                    f"({oct(mod & 0o777)}) -- dosya baska kullanicilar tarafindan "
+                    "okunabilir olabilir."
+                )
+        except OSError:
+            pass
 
 
 # ---------------------------------------------------------------------------
@@ -733,6 +796,10 @@ class AcquisitionWorker(QThread):
             target_host=c["host"], source_identifier=f"PhysicalDrive{disk_number}", acquisition_type=mode,
             source_description=disk_description,
         )
+        # Linux kolundaki AYNI degisken -- Windows kolu birlestirme sonrasi
+        # `segments` kullanıyor (hash ve log akisi); tanimlanmamis olsaydi
+        # imaj BASHARIYLA bittikten sonra NameError ile rapor kaybedilirdi.
+        segments = None
         try:
             apply_wb = (mode == "offline")
 
@@ -857,31 +924,58 @@ class AcquisitionWorker(QThread):
                     self.log.emit("[BİLGİ] İşlem yarım kaldı. Daha sonra aynı diski seçip devam edebilirsiniz.", None)
                 return
 
-            self.log.emit("\n[+] Bloklar birleştiriliyor...", "info")
-            imaj_yolu = concatenate_blocks(
-                sonuc["block_paths"], sonuc["total_blocks"],
-                output_dir=sonuc["output_dir"], output_path=out_path, cleanup=(mode != "live"),
-            )
-            if imaj_yolu is None:
-                if report:
-                    report.finish(
-                        status="failed", output_path=out_path,
-                        failed_items=[str(b) for b in sonuc.get("failed_blocks", [])],
-                    )
-                    self._save_report(report, sonuc.get("output_dir") or os.path.dirname(out_path) or ".")
-                self.log.emit("[HATA] Eksik bloklar nedeniyle imaj birleştirilemedi.", None)
-                return
+            # bkz. Linux kolundaki AYNI akis -- segment_size_bytes GUI'de
+            # secilebiliyor ve _start_disk_windows ctx'e koyuyor ama kol
+            # icinde HIC kontrol edilmiyordu: kullanici "2 GB segment"
+            # secse bile sessizce tek dosya birlestiriliyordu (bui bir
+            # sessiz ozellik kaybiydi, simdi Linux ile ayni akis).
+            segments = None
+            if segment_size_bytes:
+                self.log.emit("\n[+] Bloklar segmentlere bölünüyor...", "info")
+                segments = write_segments(
+                    sonuc["block_paths"], sonuc["total_blocks"], segment_size_bytes,
+                    output_dir=sonuc["output_dir"],
+                    output_basename=os.path.splitext(os.path.basename(out_path))[0],
+                    cleanup=(mode != "live"),
+                )
+                if segments is None:
+                    if report:
+                        report.finish(
+                            status="failed", output_path=out_path,
+                            failed_items=[str(b) for b in sonuc.get("failed_blocks", [])],
+                        )
+                        self._save_report(report, sonuc.get("output_dir") or os.path.dirname(out_path) or ".")
+                    self.log.emit("[HATA] Eksik bloklar nedeniyle segmentli imaj oluşturulamadı.", None)
+                    return
+                imaj_yolu = segments[0]
+                self.log.emit(f"[BAŞARILI] İmaj {len(segments)} segmente bölündü: {imaj_yolu} (+{len(segments) - 1} diğer)", None)
+                hashes = hash_files_multi(segments)
+            else:
+                self.log.emit("\n[+] Bloklar birleştiriliyor...", "info")
+                imaj_yolu = concatenate_blocks(
+                    sonuc["block_paths"], sonuc["total_blocks"],
+                    output_dir=sonuc["output_dir"], output_path=out_path, cleanup=(mode != "live"),
+                )
+                if imaj_yolu is None:
+                    if report:
+                        report.finish(
+                            status="failed", output_path=out_path,
+                            failed_items=[str(b) for b in sonuc.get("failed_blocks", [])],
+                        )
+                        self._save_report(report, sonuc.get("output_dir") or os.path.dirname(out_path) or ".")
+                    self.log.emit("[HATA] Eksik bloklar nedeniyle imaj birleştirilemedi.", None)
+                    return
 
-            self.log.emit(f"[BAŞARILI] İmaj birleştirildi: {imaj_yolu}", None)
-            # SHA-256 + MD5 + SHA-1 TEK okuma gecisinde birlikte hesaplanir
-            # (bkz. forensic_report.finish()'teki AYNI gerekce) -- sikistirma
-            # varsa bile bu HAM (henuz sikistirilmamis) icerik uzerinde
-            # yapilir, cunku rapordaki butunluk degeri her zaman ham
-            # icerige ait kalmali.
-            hashes = hash_file_multi(imaj_yolu)
+                self.log.emit(f"[BAŞARILI] İmaj birleştirildi: {imaj_yolu}", None)
+                # SHA-256 + MD5 + SHA-1 TEK okuma gecisinde birlikte hesaplanir
+                # (bkz. forensic_report.finish()'teki AYNI gerekce) -- sikistirma
+                # varsa bile bu HAM (henuz sikistirilmamis) icerik uzerinde
+                # yapilir, cunku rapordaki butunluk degeri her zaman ham
+                # icerige ait kalmali.
+                hashes = hash_file_multi(imaj_yolu)
             master_hash = hashes.get("sha256")
             self.log.emit(f"[+] Yerel master SHA-256: {master_hash}", "info")
-            raw_bytes = os.path.getsize(imaj_yolu)
+            raw_bytes = sum(os.path.getsize(s) for s in segments) if segments else os.path.getsize(imaj_yolu)
 
             if compress and not segments:
                 self.log.emit("[i] İmaj gzip ile sıkıştırılıyor (bu biraz sürebilir)...", "info")
@@ -2634,11 +2728,23 @@ class ForensicWidget(QWidget):
             if not veri:
                 return
             offset, inode, isim = veri
-            gecici_yol = os.path.join(tempfile.gettempdir(), f"chameleon_onizleme_{inode}_{isim}")
+            # isim SANITIZE EDILMEDEN kullanilmaz -- bkz. _guvenli_onizleme_
+            # dosya_adi docstring'i (path traversal, CWE-22).
+            guvenli_ad = _guvenli_onizleme_dosya_adi(inode, isim)
+            gecici_kok = tempfile.gettempdir()
+            gecici_yol = os.path.join(gecici_kok, f"chameleon_onizleme_{guvenli_ad}")
+            # Savunma derinligi: sanitize mantiginda ileride bir hata olsa
+            # bile, nihai yol gercekten gecici klasorun ALTINDA kalmiyorsa
+            # cikarma islemi YAPILMAZ.
+            gercek_yol = os.path.realpath(gecici_yol)
+            gercek_kok = os.path.realpath(gecici_kok)
+            if gercek_yol != gercek_kok and not gercek_yol.startswith(gercek_kok + os.sep):
+                self._log("[UYARI] Onizleme yolu gecici klasor disinda, cikarma iptal edildi.", "warn")
+                return
             try:
                 disk_tree.extract_file(image_path, offset, inode, gecici_yol)
                 os.startfile(gecici_yol)
-            except OSError as exc:
+            except (OSError, disk_tree.DiskTreeError) as exc:
                 self._log(f"[UYARI] Dosya çıkarılamadı: {exc}", "warn")
 
         tree.itemDoubleClicked.connect(_cift_tikla)

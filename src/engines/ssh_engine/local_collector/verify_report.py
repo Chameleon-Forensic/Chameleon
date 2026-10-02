@@ -78,7 +78,13 @@ def check_report_integrity(report_path):
         return None
 
     with open(sha_path, "r", encoding="utf-8") as f:
-        expected = f.read().strip().split()[0].lower()
+        tokens = f.read().strip().split()
+
+    if not tokens:
+        print(f"[HATA] Sidecar dosyasi bos/gecersiz: {os.path.basename(sha_path)}")
+        return False
+
+    expected = tokens[0].lower()
 
     with open(report_path, "rb") as f:
         actual = hashlib.sha256(f.read()).hexdigest()
@@ -142,11 +148,14 @@ def check_image_hash(report_path):
         for s in segmentler:
             print(f"    {s}")
         try:
-            actual_hash = hash_files_multi(segmentler, algorithms=("sha256",))["sha256"]
-        except (OSError, FileNotFoundError) as exc:
+            actual_hash = hash_files_multi(
+                segmentler, algorithms=("sha256",), progress=_print_progress
+            )["sha256"]
+            segment_match = compare_digests(actual_hash, expected_hash)
+        except (OSError, FileNotFoundError, HashError) as exc:
             print(f"\n[HATA] {exc}")
             return False
-        if not compare_digests(actual_hash, expected_hash):
+        if not segment_match:
             print("\n[!] DOĞRULAMA BAŞARISIZ — segmentler birlikte, rapordaki hash ile eşleşmiyor.")
             print(f"    Beklenen  : {expected_hash}")
             print(f"    Hesaplanan: {actual_hash}")
@@ -155,10 +164,11 @@ def check_image_hash(report_path):
         print("[i] İmaj gzip ile sıkıştırılmış -- açılıp (decompress) ham içerik hesaplanıyor...")
         try:
             actual_hash = _hash_gzip_contents(image_path)
-        except (OSError, gzip.BadGzipFile) as exc:
+            gzip_match = compare_digests(actual_hash, expected_hash)
+        except (OSError, EOFError, gzip.BadGzipFile, HashError) as exc:
             print(f"\n[HATA] {exc}")
             return False
-        if not compare_digests(actual_hash, expected_hash):
+        if not gzip_match:
             print(f"\n[!] DOĞRULAMA BAŞARISIZ — açılan içerik, rapordaki hash ile eşleşmiyor.")
             print(f"    Beklenen  : {expected_hash}")
             print(f"    Hesaplanan: {actual_hash}")

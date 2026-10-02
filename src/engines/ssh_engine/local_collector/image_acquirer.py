@@ -534,6 +534,17 @@ def acquire_disk_image(
                 f"Devam ederken kontrol edildi: disk salt-okunur DEGIL (Live modda "
                 f"beklenen bir durum; Offline modda bekleniyorsa incelenmeli): {disk_path}",
             )
+        elif hala_salt_okunur is None:
+            # SSH cagrisi basarisiz oldu -- diskin o anki durumu BILINMIYOR.
+            # True/False dallarinin amaci bu durumu delil zincirine kaydetmekti;
+            # sessizce atlanirsa "hala salt-okunur mu?" sorusu icin HICBIR
+            # kayit kalmaz, oysa tam bu yuzden kontrol ediliyordu (bkz.
+            # windows_acquirer.py'deki AYNI duzeltme).
+            coc.log_event(
+                coc.EVENT_EXAM_ERROR,
+                f"Devam ederken kontrol edilemedi (SSH hatasi): disk {disk_path}'in "
+                f"salt-okunur durumu DOGRULANAMADI, delil zincirine bakilmali",
+            )
         apply_write_blocker = False
     else:
         coc.log_event(coc.EVENT_EXAM_START, f"Imaj alma baslatildi: {disk_path}")
@@ -597,7 +608,12 @@ def acquire_disk_image(
     if resume_state:
         acquired_blocks = list(resume_state.get("acquired_blocks", []))
         failed_blocks = list(resume_state.get("failed_blocks", []))
-        block_paths = dict(resume_state.get("block_paths", {}))
+        # json.load'dan gelen manifestte anahtarlar STRING'dir ("0", "1", ...) --
+        # int'e cevrilmezse asagida YENI eklenen (int anahtarli) bloklarla
+        # karisir ve concatenate_blocks/write_segments'teki "i not in
+        # block_paths" (int i) kontrolu resume ONCESI alinan hicbir blogu
+        # BULAMAZ (hepsi "eksik" sayilir, oysa hepsi diskte ve dogrulanmis).
+        block_paths = {int(k): v for k, v in resume_state.get("block_paths", {}).items()}
     else:
         acquired_blocks = []
         failed_blocks = []
@@ -620,6 +636,7 @@ def acquire_disk_image(
                 "manifest_path": manifest_path,
                 "resume_from": block_no,
                 "user_stopped": True,
+                "started_at_utc": started_at_utc,
             }
 
         retry_count = 0
@@ -649,6 +666,7 @@ def acquire_disk_image(
                     "output_dir": output_dir,
                     "manifest_path": manifest_path,
                     "resume_from": block_no,
+                    "started_at_utc": started_at_utc,
                 }
 
             uzak_hash = get_remote_block_hash(
